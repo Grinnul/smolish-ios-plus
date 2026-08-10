@@ -77,6 +77,16 @@ struct WebSignInView: View {
                     ProgressView().padding(10).background(.ultraThinMaterial, in: Capsule()).padding(.top, 8)
                 }
 
+                VStack {
+                    Spacer()
+                    Text(webAuthentication.statusMessage)
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.bottom, 12)
+                }
+
                 if let error = webAuthentication.errorMessage {
                     Text(error)
                         .font(.caption).foregroundStyle(.white)

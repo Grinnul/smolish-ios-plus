@@ -6,6 +6,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var isCheckingSession = false
     @Published private(set) var currentURL: URL?
+    @Published private(set) var statusMessage = "Waiting for sign-in…"
     @Published var errorMessage: String?
 
     let webView: WKWebView
@@ -29,6 +30,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         sessionStore = session
         didComplete = false
         errorMessage = nil
+        statusMessage = "Waiting for sign-in…"
         if webView.url?.host?.hasSuffix("smolish.com") == true {
             webView.reload()
         } else {
@@ -72,28 +74,49 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         guard !isCheckingSession, webView.url?.host?.hasSuffix("smolish.com") == true else { return }
         isCheckingSession = true
         defer { isCheckingSession = false }
+        statusMessage = "Checking Smolish session…"
         let script = """
         (async () => {
           try {
-            const response = await fetch('/api/profile', { credentials: 'include', cache: 'no-store' });
+            const response = await fetch('/api/auth/get-session', { credentials: 'include', cache: 'no-store' });
             if (!response.ok) return null;
-            return JSON.stringify({ profile: await response.json(), userAgent: navigator.userAgent });
+            const auth = await response.json();
+            if (!auth || !auth.user || !auth.session) return null;
+            const user = auth.user;
+            return JSON.stringify({
+              profile: {
+                id: user.id ?? null,
+                handle: user.handle ?? user.username ?? null,
+                name: user.name ?? null,
+                displayName: user.displayName ?? user.name ?? null,
+                avatarUrl: user.avatarUrl ?? user.avatar ?? user.image ?? null
+              },
+              userAgent: navigator.userAgent
+            });
           } catch (_) { return null; }
         })()
         """
         do {
             guard let json = try await webView.evaluateJavaScript(script) as? String,
                   let data = json.data(using: .utf8),
-                  let envelope = try? JSONDecoder().decode(WebProfileEnvelope.self, from: data) else { return }
+                  let envelope = try? JSONDecoder().decode(WebProfileEnvelope.self, from: data) else {
+                statusMessage = "Signed-in session not detected yet…"
+                return
+            }
             let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
                 .filter { $0.domain.lowercased().hasSuffix("smolish.com") }
                 .filter { $0.expiresDate.map { $0 > Date() } ?? true }
                 .sorted { $0.name < $1.name }
                 .map { "\($0.name)=\($0.value)" }
                 .joined(separator: "; ")
-            guard !cookies.isEmpty, let sessionStore else { return }
+            guard !cookies.isEmpty, let sessionStore else {
+                statusMessage = "Signed in, waiting for browser cookies…"
+                return
+            }
+            statusMessage = "Transferring session to Smolish V2…"
             try sessionStore.acceptWebSession(cookie: cookies, userAgent: envelope.userAgent, profile: envelope.profile)
             didComplete = true
+            statusMessage = "Signed in"
             stopPolling()
             onSignIn?()
         } catch {
