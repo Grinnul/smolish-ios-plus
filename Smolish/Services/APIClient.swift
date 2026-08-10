@@ -1,5 +1,27 @@
 import Foundation
 
+actor AuthRequestGate {
+    static let shared = AuthRequestGate()
+    private var maintenanceActive = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func beginMaintenance() {
+        maintenanceActive = true
+    }
+
+    func endMaintenance() {
+        maintenanceActive = false
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func waitUntilAvailable() async {
+        guard maintenanceActive else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
 enum APIError: LocalizedError {
     case invalidResponse
     case server(status: Int, message: String?)
@@ -152,6 +174,7 @@ actor APIClient {
     }
 
     func postComment(videoID: String, body: String, parentID: String? = nil) async throws -> PostedCommentResponse {
+        await AuthRequestGate.shared.waitUntilAvailable()
         guard let cookie = KeychainCookieStore.load() else {
             throw APIError.server(status: 401, message: "Sign in from Profile first.")
         }
@@ -165,6 +188,7 @@ actor APIClient {
     }
 
     func setCommentReaction(commentID: String, liked: Bool) async throws {
+        await AuthRequestGate.shared.waitUntilAvailable()
         let reaction: String? = liked ? "like" : nil
         guard let cookie = KeychainCookieStore.load() else {
             throw APIError.server(status: 401, message: "Sign in from Profile first.")
@@ -185,6 +209,9 @@ actor APIClient {
     }
 
     private func request<T: Decodable>(_ url: URL, authenticated: Bool = false, includeSessionIfAvailable: Bool = false) async throws -> T {
+        if authenticated || includeSessionIfAvailable {
+            await AuthRequestGate.shared.waitUntilAvailable()
+        }
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -206,6 +233,7 @@ actor APIClient {
     }
 
     private func authenticatedData(url: URL) async throws -> Data {
+        await AuthRequestGate.shared.waitUntilAvailable()
         guard let cookie = KeychainCookieStore.load() else {
             throw APIError.server(status: 401, message: "Sign in from Profile first.")
         }
@@ -217,6 +245,7 @@ actor APIClient {
     }
 
     private func mutation(path: String, method: String, body: [String: String]) async throws {
+        await AuthRequestGate.shared.waitUntilAvailable()
         guard let cookie = KeychainCookieStore.load() else {
             throw APIError.server(status: 401, message: "Sign in from Profile first.")
         }
@@ -229,6 +258,7 @@ actor APIClient {
     }
 
     private func authenticatedJSON<Body: Encodable, Response: Decodable>(path: String, method: String, body: Body) async throws -> Response {
+        await AuthRequestGate.shared.waitUntilAvailable()
         guard let cookie = KeychainCookieStore.load() else { throw APIError.server(status: 401, message: "Sign in from Profile first.") }
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method

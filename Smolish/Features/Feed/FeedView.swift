@@ -3,6 +3,7 @@ import SwiftUI
 struct FeedView: View {
     let isTabActive: Bool
     @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject private var session: SessionStore
     @StateObject private var model = FeedViewModel()
     @State private var currentVideoID: String?
     @State private var showSignIn = false
@@ -54,7 +55,7 @@ struct FeedView: View {
                 }
             }
         }
-        .task { await model.loadIfNeeded() }
+        .task(id: session.accountRevision) { await model.refresh() }
         .sheet(isPresented: $showSignIn) { CookieSignInView() }
     }
 

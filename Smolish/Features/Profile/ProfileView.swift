@@ -285,6 +285,13 @@ struct SmolishAccountSwitcherView: View {
                                             Text(account.displayName).font(.headline)
                                             Text(account.handle.map { "@\($0)" } ?? "No Smolish profile yet")
                                                 .font(.caption).foregroundStyle(.secondary)
+                                            if webAuthentication.accountHealth[account.sessionToken] == .expired {
+                                                Text("Session expired — sign in again")
+                                                    .font(.caption2).foregroundStyle(.orange)
+                                            } else if webAuthentication.accountHealth[account.sessionToken] == .temporarilyUnavailable {
+                                                Text("Temporarily unavailable")
+                                                    .font(.caption2).foregroundStyle(.secondary)
+                                            }
                                         }
                                         Spacer()
                                         if webAuthentication.switchingAccountToken == account.sessionToken {
@@ -296,7 +303,9 @@ struct SmolishAccountSwitcherView: View {
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(account.active || webAuthentication.switchingAccountToken != nil)
+                                .disabled(account.active || webAuthentication.switchingAccountToken != nil
+                                          || webAuthentication.isMaintainingAccounts
+                                          || webAuthentication.accountHealth[account.sessionToken] == .expired)
                             }
                         }
                         Section {

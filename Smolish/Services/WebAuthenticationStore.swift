@@ -11,6 +11,8 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     @Published private(set) var accounts: [WebAccount] = []
     @Published private(set) var isLoadingAccounts = false
     @Published private(set) var switchingAccountToken: String?
+    @Published private(set) var accountHealth: [String: AccountSessionHealth] = [:]
+    @Published private(set) var isMaintainingAccounts = false
 
     let webView: WKWebView
     private weak var sessionStore: SessionStore?
@@ -20,6 +22,9 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     private var knownAccountTokens: Set<String> = []
     private var accountBeingAddedFromProfileID: String?
     private var isPreparingAddAccount = false
+    private var isPrepared = false
+    private let maintenanceInterval: TimeInterval = 30 * 60
+    private let lastMaintenanceKey = "smolish.lastMultiAccountMaintenance"
     var onSignIn: (() -> Void)?
 
     override init() {
@@ -31,7 +36,20 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
+    }
+
+    func restore(session: SessionStore) async {
+        sessionStore = session
+        guard !isPrepared else { return }
+        isPrepared = true
+        let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
+        for cookie in WebCookieJarStore.load() {
+            await cookieStore.setCookie(cookie)
+        }
         webView.load(URLRequest(url: URL(string: "https://smolish.com/search")!))
+        guard await ensureBrowserReady() else { return }
+        _ = await refreshActiveBrowserSession()
+        _ = await checkSession()
     }
 
     func start(session: SessionStore) {
@@ -146,7 +164,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     }
 
     func switchAccount(_ account: WebAccount) async -> Bool {
-        guard !account.active, switchingAccountToken == nil else { return false }
+        guard !account.active, switchingAccountToken == nil, !isMaintainingAccounts else { return false }
         switchingAccountToken = account.sessionToken
         errorMessage = nil
         defer { switchingAccountToken = nil }
@@ -154,6 +172,36 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
             errorMessage = "The Smolish browser session is not ready. Please try again."
             return false
         }
+        let previousAccount = accounts.first(where: \.active)
+        await AuthRequestGate.shared.beginMaintenance()
+        let switched = await activateAccount(account)
+        if switched == .success {
+            webView.reloadFromOrigin()
+            for _ in 0..<20 {
+                try? await Task.sleep(for: .milliseconds(500))
+                if await checkSession(expectedHandle: account.handle) {
+                    _ = await refreshActiveBrowserSession()
+                    await loadAccounts()
+                    await AuthRequestGate.shared.endMaintenance()
+                    return true
+                }
+            }
+            errorMessage = "Smolish did not activate @\(account.handle ?? account.displayName). Please try again."
+        } else {
+            errorMessage = "That Smolish account could not be opened."
+        }
+        if let previousAccount {
+            _ = await activateAccount(previousAccount)
+            _ = await promoteMultiSessionCookie(for: previousAccount.sessionToken)
+            _ = await refreshActiveBrowserSession()
+            _ = await checkSession(expectedHandle: previousAccount.handle)
+            await loadAccounts()
+        }
+        await AuthRequestGate.shared.endMaintenance()
+        return false
+    }
+
+    private func activateAccount(_ account: WebAccount) async -> WebAccountActivation {
         let script = """
         try {
           const response = await fetch('/api/auth/multi-session/set-active', {
@@ -162,46 +210,23 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
             body: JSON.stringify({ sessionToken: accountToken })
           });
           const body = await response.json().catch(() => null);
-          return JSON.stringify({
-            ok: response.ok && !!body?.session,
-            status: response.status,
-            error: body?.message ?? body?.error ?? null
-          });
+          return JSON.stringify({ ok: response.ok && !!body?.session, status: response.status,
+            error: body?.message ?? body?.error ?? null });
         } catch (error) {
           return JSON.stringify({ ok: false, status: 0, error: String(error) });
         }
         """
-        do {
-            guard let json = try await webView.callAsyncJavaScript(
-                script,
-                arguments: ["accountToken": account.sessionToken],
-                in: nil,
-                contentWorld: .page
-            ) as? String,
-                  let data = json.data(using: .utf8),
-                  let result = try? JSONDecoder().decode(WebAccountSwitchResult.self, from: data),
-                  result.ok else {
-                errorMessage = "That Smolish account could not be opened."
-                return false
-            }
-            guard await promoteMultiSessionCookie(for: account.sessionToken) else {
-                errorMessage = "Smolish switched the account but its browser cookie could not be activated."
-                return false
-            }
-            webView.reloadFromOrigin()
-            for _ in 0..<20 {
-                try? await Task.sleep(for: .milliseconds(500))
-                if await checkSession(expectedHandle: account.handle) {
-                    await loadAccounts()
-                    return true
-                }
-            }
-            errorMessage = "Smolish did not activate @\(account.handle ?? account.displayName). Please try again."
-            return false
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
+        guard let json = try? await webView.callAsyncJavaScript(
+            script, arguments: ["accountToken": account.sessionToken], in: nil, contentWorld: .page
+        ) as? String,
+              let data = json.data(using: .utf8),
+              let result = try? JSONDecoder().decode(WebAccountSwitchResult.self, from: data) else {
+            return .temporarilyUnavailable
         }
+        guard result.ok else {
+            return result.status == 401 || result.status == 404 ? .expired : .temporarilyUnavailable
+        }
+        return await promoteMultiSessionCookie(for: account.sessionToken) ? .success : .temporarilyUnavailable
     }
 
     private func promoteMultiSessionCookie(for sessionToken: String) async -> Bool {
@@ -228,8 +253,9 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         return updated.contains { $0.name == primaryName && $0.value == source.value }
     }
 
-    func refreshBrowserSession() async {
-        guard await ensureBrowserReady() else { return }
+    @discardableResult
+    private func refreshActiveBrowserSession(updateNativeHeader: Bool = true) async -> Bool {
+        guard await ensureBrowserReady() else { return false }
         let script = """
         try {
           var response = await fetch('/api/auth/get-session', { credentials: 'include', cache: 'no-store' });
@@ -244,7 +270,65 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
           return response.ok;
         } catch (_) { return false; }
         """
-        _ = try? await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
+        let refreshed = (try? await webView.callAsyncJavaScript(
+            script, arguments: [:], in: nil, contentWorld: .page
+        ) as? Bool) ?? false
+        _ = try? await persistBrowserCookies(updateNativeHeader: updateNativeHeader)
+        return refreshed
+    }
+
+    func refreshBrowserSession() async {
+        _ = await refreshActiveBrowserSession()
+    }
+
+    func refreshAllAccountsIfNeeded(force: Bool = false) async {
+        guard isPrepared, !isMaintainingAccounts, switchingAccountToken == nil,
+              sessionStore?.isAuthenticated == true else { return }
+        let lastRun = UserDefaults.standard.object(forKey: lastMaintenanceKey) as? Date ?? .distantPast
+        guard force || Date().timeIntervalSince(lastRun) >= maintenanceInterval else { return }
+        guard await ensureBrowserReady() else { return }
+
+        isMaintainingAccounts = true
+        await AuthRequestGate.shared.beginMaintenance()
+        await loadAccounts()
+        guard let selected = accounts.first(where: \.active) else {
+            isMaintainingAccounts = false
+            await AuthRequestGate.shared.endMaintenance()
+            return
+        }
+
+        var health = accountHealth
+        for account in accounts where !account.active {
+            let activation = await activateAccount(account)
+            if activation == .success {
+                let refreshed = await refreshActiveBrowserSession(updateNativeHeader: false)
+                health[account.sessionToken] = refreshed ? .valid(lastRefresh: Date()) : .temporarilyUnavailable
+            } else {
+                health[account.sessionToken] = activation == .expired ? .expired : .temporarilyUnavailable
+            }
+        }
+
+        let restored = await activateAccount(selected)
+        if restored == .success {
+            _ = await refreshActiveBrowserSession()
+            _ = await checkSession(expectedHandle: selected.handle, allowDuringMaintenance: true)
+            health[selected.sessionToken] = .valid(lastRefresh: Date())
+            UserDefaults.standard.set(Date(), forKey: lastMaintenanceKey)
+        } else {
+            // Even if the network switch failed, restore the original primary
+            // cookie locally so native requests and WebKit cannot diverge.
+            let restoredLocally = await promoteMultiSessionCookie(for: selected.sessionToken)
+            if restoredLocally {
+                _ = await refreshActiveBrowserSession()
+                _ = await checkSession(expectedHandle: selected.handle, allowDuringMaintenance: true)
+            }
+            health[selected.sessionToken] = restoredLocally
+                ? .valid(lastRefresh: Date()) : .temporarilyUnavailable
+        }
+        accountHealth = health
+        await loadAccounts()
+        isMaintainingAccounts = false
+        await AuthRequestGate.shared.endMaintenance()
     }
 
     func clearWebSession() async {
@@ -253,6 +337,8 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         let records = await store.dataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes())
         let smolishRecords = records.filter { $0.displayName.contains("smolish") }
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: smolishRecords)
+        WebCookieJarStore.delete()
+        UserDefaults.standard.removeObject(forKey: lastMaintenanceKey)
         webView.loadHTMLString("", baseURL: nil)
     }
 
@@ -268,8 +354,9 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     }
 
     @discardableResult
-    private func checkSession(expectedHandle: String? = nil) async -> Bool {
+    private func checkSession(expectedHandle: String? = nil, allowDuringMaintenance: Bool = false) async -> Bool {
         guard !isPreparingAddAccount,
+              (!isMaintainingAccounts || allowDuringMaintenance),
               !isCheckingSession,
               webView.url?.host?.hasSuffix("smolish.com") == true else { return false }
         isCheckingSession = true
@@ -320,12 +407,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
                 statusMessage = "Waiting for @\(expectedHandle) to become active…"
                 return false
             }
-            let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
-                .filter { $0.domain.lowercased().hasSuffix("smolish.com") }
-                .filter { $0.expiresDate.map { $0 > Date() } ?? true }
-                .sorted { $0.name < $1.name }
-                .map { "\($0.name)=\($0.value)" }
-                .joined(separator: "; ")
+            let cookies = try await persistBrowserCookies(updateNativeHeader: false)
             guard !cookies.isEmpty, let sessionStore else {
                 statusMessage = "Signed in, waiting for browser cookies…"
                 return false
@@ -349,12 +431,33 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
             statusMessage = "Signed in"
             stopPolling()
             onSignIn?()
+            Task { await self.refreshAllAccountsIfNeeded(force: true) }
             return true
         } catch {
             statusMessage = "Browser bridge failed"
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    @discardableResult
+    private func persistBrowserCookies(updateNativeHeader: Bool) async throws -> String {
+        let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
+            .filter { $0.domain.lowercased().hasSuffix("smolish.com") }
+            .filter { $0.expiresDate.map { $0 > Date() } ?? true }
+        try WebCookieJarStore.save(cookies)
+        let header = cookies.sorted { $0.name < $1.name }
+            .map { "\($0.name)=\($0.value)" }
+            .joined(separator: "; ")
+        if updateNativeHeader, !header.isEmpty {
+            try KeychainCookieStore.save(header)
+            if let userAgent = try? await webView.callAsyncJavaScript(
+                "return navigator.userAgent;", arguments: [:], in: nil, contentWorld: .page
+            ) as? String, !userAgent.isEmpty {
+                try BrowserUserAgentStore.save(userAgent)
+            }
+        }
+        return header
     }
 }
 
@@ -412,6 +515,12 @@ struct WebAccount: Identifiable, Decodable, Sendable {
     var id: String { sessionToken }
 }
 
+enum AccountSessionHealth: Equatable, Sendable {
+    case valid(lastRefresh: Date)
+    case temporarilyUnavailable
+    case expired
+}
+
 private struct WebAccountsEnvelope: Decodable {
     let accounts: [WebAccount]
     let error: String?
@@ -421,6 +530,12 @@ private struct WebAccountSwitchResult: Decodable {
     let ok: Bool
     let status: Int
     let error: String?
+}
+
+private enum WebAccountActivation: Equatable {
+    case success
+    case temporarilyUnavailable
+    case expired
 }
 
 struct PersistentWebView: UIViewRepresentable {

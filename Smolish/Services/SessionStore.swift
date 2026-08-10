@@ -1,6 +1,39 @@
 import Foundation
 import Security
 
+struct PersistedWebCookie: Codable, Sendable {
+    let name: String
+    let value: String
+    let domain: String
+    let path: String
+    let expiresDate: Date?
+    let isSecure: Bool
+    let isHTTPOnly: Bool
+
+    init(_ cookie: HTTPCookie) {
+        name = cookie.name
+        value = cookie.value
+        domain = cookie.domain
+        path = cookie.path
+        expiresDate = cookie.expiresDate
+        isSecure = cookie.isSecure
+        isHTTPOnly = cookie.isHTTPOnly
+    }
+
+    var httpCookie: HTTPCookie? {
+        var properties: [HTTPCookiePropertyKey: Any] = [
+            .name: name,
+            .value: value,
+            .domain: domain,
+            .path: path
+        ]
+        if let expiresDate { properties[.expires] = expiresDate }
+        if isSecure { properties[.secure] = "TRUE" }
+        if isHTTPOnly { properties[HTTPCookiePropertyKey("HttpOnly")] = "TRUE" }
+        return HTTPCookie(properties: properties)
+    }
+}
+
 struct SmolishProfile: Decodable, Sendable {
     let id: String?
     let handle: String?
@@ -49,6 +82,7 @@ final class SessionStore: ObservableObject {
     @Published private(set) var profile: SmolishProfile?
     @Published private(set) var isChecking = false
     @Published private(set) var isAuthenticated = false
+    @Published private(set) var accountRevision = 0
     @Published var authenticationError: String?
 
     init() {
@@ -90,9 +124,11 @@ final class SessionStore: ObservableObject {
 
     func acceptWebSession(cookie: String, userAgent: String, profile: SmolishProfile) throws {
         guard !cookie.isEmpty, !userAgent.isEmpty else { throw APIError.invalidResponse }
+        let identityChanged = self.profile?.id != profile.id || self.profile?.handle != profile.handle
         try KeychainCookieStore.save(cookie)
         try BrowserUserAgentStore.save(userAgent)
         self.profile = profile
+        if identityChanged { accountRevision += 1 }
         isAuthenticated = true
         authenticationError = nil
     }
@@ -111,16 +147,18 @@ final class SessionStore: ObservableObject {
             profile = try await APIClient.shared.profile()
             isAuthenticated = true
         } catch {
-            profile = nil
-            isAuthenticated = false
-            authenticationError = "That cookie is expired or invalid. \(error.localizedDescription)"
+            // A timeout, offline launch, or Cloudflare challenge must not erase a
+            // session that WebKit may still be able to refresh when connectivity returns.
+            authenticationError = "Couldn’t verify the saved session yet. \(error.localizedDescription)"
         }
     }
 
     func signOut() {
         KeychainCookieStore.delete()
         BrowserUserAgentStore.delete()
+        WebCookieJarStore.delete()
         profile = nil
+        accountRevision += 1
         isAuthenticated = false
         authenticationError = nil
     }
@@ -136,6 +174,68 @@ final class SessionStore: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { $0.contains("=") }
             .joined(separator: "; ")
+    }
+}
+
+enum WebCookieJarStore {
+    private static let service = "com.smolish.ios.v2.session"
+    private static let account = "webkit-cookie-jar"
+
+    static func save(_ cookies: [HTTPCookie]) throws {
+        let persisted = cookies
+            .filter { $0.domain.lowercased().hasSuffix("smolish.com") }
+            .filter { $0.expiresDate.map { $0 > Date() } ?? true }
+            .map(PersistedWebCookie.init)
+        try KeychainDataStore.save(try JSONEncoder().encode(persisted), service: service, account: account)
+    }
+
+    static func load() -> [HTTPCookie] {
+        guard let data = KeychainDataStore.load(service: service, account: account),
+              let persisted = try? JSONDecoder().decode([PersistedWebCookie].self, from: data) else { return [] }
+        return persisted
+            .filter { $0.expiresDate.map { $0 > Date() } ?? true }
+            .compactMap(\.httpCookie)
+    }
+
+    static func delete() {
+        KeychainDataStore.delete(service: service, account: account)
+    }
+}
+
+private enum KeychainDataStore {
+    static func save(_ data: Data, service: String, account: String) throws {
+        delete(service: service, account: account)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecValueData as String: data
+        ]
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+    }
+
+    static func load(service: String, account: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
+    }
+
+    static func delete(service: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }
 

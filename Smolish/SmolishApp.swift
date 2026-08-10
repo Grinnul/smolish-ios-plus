@@ -16,13 +16,14 @@ struct SmolishApp: App {
                 .tint(.smolishBlue)
                 .preferredColorScheme(.dark)
                 .task {
+                    await webAuthentication.restore(session: session)
                     await session.restore()
-                    await webAuthentication.refreshBrowserSession()
+                    await webAuthentication.refreshAllAccountsIfNeeded()
                     notifications.startPolling(session: session)
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
-                        Task { await webAuthentication.refreshBrowserSession() }
+                        Task { await webAuthentication.refreshAllAccountsIfNeeded() }
                     }
                 }
         }

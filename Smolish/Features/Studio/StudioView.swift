@@ -139,7 +139,7 @@ struct StudioView: View {
                 }
             }
         }
-        .task(id: session.isAuthenticated) { if session.isAuthenticated { await model.load() } }
+        .task(id: session.accountRevision) { if session.isAuthenticated { await model.load() } }
         .onChange(of: model.selectedDays) { _, _ in Task { await model.load() } }
         .sheet(isPresented: $showUpload) {
             VideoUploadView {

@@ -102,7 +102,7 @@ struct NotificationsView: View {
                 }
             }
         }
-        .task {
+        .task(id: session.accountRevision) {
             notifications.startPolling(session: session)
             await notifications.refresh(session: session)
         }
