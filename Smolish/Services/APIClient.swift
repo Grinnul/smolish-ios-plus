@@ -35,12 +35,13 @@ actor APIClient {
         decoder.dateDecodingStrategy = .iso8601
     }
 
-    func feed(cursor: String? = nil, author: String? = nil, friends: Bool = false) async throws -> FeedResponse {
+    func feed(cursor: String? = nil, author: String? = nil, friends: Bool = false, refreshNonce: String? = nil) async throws -> FeedResponse {
         var components = URLComponents(url: baseURL.appending(path: "api/feed"), resolvingAgainstBaseURL: false)!
         var queryItems: [URLQueryItem] = []
         if let cursor { queryItems.append(URLQueryItem(name: "cursor", value: cursor)) }
         if let author { queryItems.append(URLQueryItem(name: "author", value: author)) }
         if friends { queryItems.append(URLQueryItem(name: "friends", value: "1")) }
+        if let refreshNonce { queryItems.append(URLQueryItem(name: "_refresh", value: refreshNonce)) }
         components.queryItems = queryItems.isEmpty ? nil : queryItems
         return try await request(components.url!, includeSessionIfAvailable: true)
     }

@@ -22,8 +22,13 @@ final class FeedViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let response = try await APIClient.shared.feed()
-            videos = response.items
+            let previousOrder = videos.map(\.id)
+            let response = try await APIClient.shared.feed(refreshNonce: UUID().uuidString)
+            var refreshed = response.items
+            if refreshed.count > 1, refreshed.map(\.id) == previousOrder {
+                refreshed.rotateFirstToEnd()
+            }
+            videos = refreshed
             nextCursor = response.nextCursor
             hasLoaded = true
         } catch {
@@ -47,5 +52,12 @@ final class FeedViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+private extension Array {
+    mutating func rotateFirstToEnd() {
+        guard !isEmpty else { return }
+        append(removeFirst())
     }
 }

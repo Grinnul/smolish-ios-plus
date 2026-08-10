@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct FeedView: View {
+    let isTabActive: Bool
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = FeedViewModel()
     @State private var currentVideoID: String?
     @State private var showSignIn = false
@@ -28,7 +30,7 @@ struct FeedView: View {
                             ForEach(model.videos) { video in
                                 VideoPageView(
                                     video: video,
-                                    isActive: currentVideoID == video.id,
+                                    isActive: isTabActive && scenePhase == .active && currentVideoID == video.id,
                                     onRequiresSignIn: { showSignIn = true }
                                 )
                                 .frame(width: proxy.size.width, height: proxy.size.height)
@@ -44,9 +46,10 @@ struct FeedView: View {
                     .scrollClipDisabled(false)
                     .scrollPosition(id: $currentVideoID)
                     .refreshable { await model.refresh() }
-                    .onAppear { currentVideoID = model.videos.first?.id }
                     .onChange(of: model.videos) { _, videos in
-                        if currentVideoID == nil { currentVideoID = videos.first?.id }
+                        if currentVideoID == nil || !videos.contains(where: { $0.id == currentVideoID }) {
+                            currentVideoID = videos.first?.id
+                        }
                     }
                 }
             }
