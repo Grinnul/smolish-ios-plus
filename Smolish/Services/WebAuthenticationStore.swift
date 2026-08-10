@@ -81,10 +81,34 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
 
     func reload() { webView.reload() }
 
+    private func ensureBrowserReady() async -> Bool {
+        if webView.url?.host?.hasSuffix("smolish.com") != true {
+            webView.load(URLRequest(url: URL(string: "https://smolish.com/search")!))
+        }
+        for _ in 0..<20 {
+            if !isLoading,
+               let state = try? await webView.callAsyncJavaScript(
+                   "return document.readyState;",
+                   arguments: [:],
+                   in: nil,
+                   contentWorld: .page
+               ) as? String,
+               state == "interactive" || state == "complete" {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return false
+    }
+
     func loadAccounts() async {
-        guard webView.url?.host?.hasSuffix("smolish.com") == true, !isLoadingAccounts else { return }
+        guard !isLoadingAccounts else { return }
         isLoadingAccounts = true
         defer { isLoadingAccounts = false }
+        guard await ensureBrowserReady() else {
+            errorMessage = "The Smolish browser session is still loading. Tap Refresh to try again."
+            return
+        }
         let script = """
         try {
           const response = await fetch('/api/accounts', { credentials: 'include', cache: 'no-store' });
@@ -94,13 +118,31 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
           return JSON.stringify({ accounts: [], error: String(error) });
         }
         """
-        do {
-            guard let json = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) as? String,
-                  let data = json.data(using: .utf8),
-                  let envelope = try? JSONDecoder().decode(WebAccountsEnvelope.self, from: data) else { return }
-            accounts = envelope.accounts
-            if let error = envelope.error { errorMessage = error }
-        } catch { errorMessage = error.localizedDescription }
+        for attempt in 0..<3 {
+            do {
+                guard let json = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) as? String,
+                      let data = json.data(using: .utf8),
+                      let envelope = try? JSONDecoder().decode(WebAccountsEnvelope.self, from: data) else { return }
+                if let error = envelope.error,
+                   error.localizedCaseInsensitiveContains("load failed"),
+                   attempt < 2 {
+                    webView.reload()
+                    try? await Task.sleep(for: .seconds(1))
+                    _ = await ensureBrowserReady()
+                    continue
+                }
+                accounts = envelope.accounts
+                errorMessage = envelope.error
+                return
+            } catch {
+                if attempt == 2 { errorMessage = error.localizedDescription }
+                else {
+                    webView.reload()
+                    try? await Task.sleep(for: .seconds(1))
+                    _ = await ensureBrowserReady()
+                }
+            }
+        }
     }
 
     func switchAccount(_ account: WebAccount) async {
@@ -108,6 +150,10 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         switchingAccountToken = account.sessionToken
         errorMessage = nil
         defer { switchingAccountToken = nil }
+        guard await ensureBrowserReady() else {
+            errorMessage = "The Smolish browser session is not ready. Please try again."
+            return
+        }
         let script = """
         try {
           const response = await fetch('/api/auth/multi-session/set-active', {

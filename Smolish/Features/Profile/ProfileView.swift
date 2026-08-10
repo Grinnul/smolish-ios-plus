@@ -248,15 +248,28 @@ struct SmolishAccountSwitcherView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            ZStack {
+                PersistentWebView(store: webAuthentication)
+                    .frame(width: 2, height: 2)
+                    .opacity(0.01)
+                    .allowsHitTesting(false)
+
                 if webAuthentication.isLoadingAccounts && webAuthentication.accounts.isEmpty {
                     ProgressView("Loading your accounts…")
                 } else if webAuthentication.accounts.isEmpty {
-                    ContentUnavailableView(
-                        "No additional accounts",
-                        systemImage: "person.2",
-                        description: Text("Add another account from the Smolish website, then refresh this list.")
-                    )
+                    VStack(spacing: 18) {
+                        ContentUnavailableView(
+                            "No additional accounts",
+                            systemImage: "person.2",
+                            description: Text("Connect another Smolish account to switch between them here.")
+                        )
+                        Button {
+                            showAddAccount = true
+                        } label: {
+                            Label("Add another account", systemImage: "person.badge.plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 } else {
                     List {
                         Section {
