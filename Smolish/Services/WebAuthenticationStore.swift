@@ -8,6 +8,9 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     @Published private(set) var currentURL: URL?
     @Published private(set) var statusMessage = "Waiting for sign-in…"
     @Published var errorMessage: String?
+    @Published private(set) var accounts: [WebAccount] = []
+    @Published private(set) var isLoadingAccounts = false
+    @Published private(set) var switchingAccountToken: String?
 
     let webView: WKWebView
     private weak var sessionStore: SessionStore?
@@ -24,6 +27,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
+        webView.load(URLRequest(url: URL(string: "https://smolish.com/search")!))
     }
 
     func start(session: SessionStore) {
@@ -49,6 +53,65 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     }
 
     func reload() { webView.reload() }
+
+    func loadAccounts() async {
+        guard webView.url?.host?.hasSuffix("smolish.com") == true, !isLoadingAccounts else { return }
+        isLoadingAccounts = true
+        defer { isLoadingAccounts = false }
+        let script = """
+        try {
+          const response = await fetch('/api/accounts', { credentials: 'include', cache: 'no-store' });
+          if (!response.ok) return JSON.stringify({ accounts: [], error: `Accounts returned ${response.status}` });
+          return JSON.stringify(await response.json());
+        } catch (error) {
+          return JSON.stringify({ accounts: [], error: String(error) });
+        }
+        """
+        do {
+            guard let json = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) as? String,
+                  let data = json.data(using: .utf8),
+                  let envelope = try? JSONDecoder().decode(WebAccountsEnvelope.self, from: data) else { return }
+            accounts = envelope.accounts
+            if let error = envelope.error { errorMessage = error }
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func switchAccount(_ account: WebAccount) async {
+        guard !account.active, switchingAccountToken == nil else { return }
+        switchingAccountToken = account.sessionToken
+        errorMessage = nil
+        defer { switchingAccountToken = nil }
+        let script = """
+        try {
+          const response = await fetch('/api/auth/multi-session/set-active', {
+            method: 'POST', credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ sessionToken: accountToken })
+          });
+          return JSON.stringify({ ok: response.ok, status: response.status });
+        } catch (error) {
+          return JSON.stringify({ ok: false, status: 0, error: String(error) });
+        }
+        """
+        do {
+            guard let json = try await webView.callAsyncJavaScript(
+                script,
+                arguments: ["accountToken": account.sessionToken],
+                in: nil,
+                contentWorld: .page
+            ) as? String,
+                  let data = json.data(using: .utf8),
+                  let result = try? JSONDecoder().decode(WebAccountSwitchResult.self, from: data),
+                  result.ok else {
+                errorMessage = "That Smolish account could not be opened."
+                return
+            }
+            webView.reload()
+            try? await Task.sleep(for: .milliseconds(500))
+            await checkSession()
+            await loadAccounts()
+        } catch { errorMessage = error.localizedDescription }
+    }
 
     func clearWebSession() async {
         stopPolling()
@@ -130,6 +193,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
             didComplete = true
             statusMessage = "Signed in"
             stopPolling()
+            await loadAccounts()
             onSignIn?()
         } catch {
             statusMessage = "Browser bridge failed"
@@ -181,6 +245,26 @@ private struct WebProfileEnvelope: Decodable {
 
 private struct WebSessionFailure: Decodable {
     let error: String
+}
+
+struct WebAccount: Identifiable, Decodable, Sendable {
+    let sessionToken: String
+    let displayName: String
+    let handle: String?
+    let avatarUrl: URL?
+    let active: Bool
+    var id: String { sessionToken }
+}
+
+private struct WebAccountsEnvelope: Decodable {
+    let accounts: [WebAccount]
+    let error: String?
+}
+
+private struct WebAccountSwitchResult: Decodable {
+    let ok: Bool
+    let status: Int
+    let error: String?
 }
 
 struct PersistentWebView: UIViewRepresentable {

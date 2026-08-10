@@ -11,6 +11,7 @@ struct ProfileView: View {
             Group {
                 if let profile = session.profile {
                     MySmolishProfileView(profile: profile)
+                        .id(profile.id ?? profile.handle ?? profile.displayNameText)
                 } else {
                     VStack(spacing: 22) {
                         SmolishLogo(size: 72)
@@ -75,6 +76,7 @@ struct MySmolishProfileView: View {
     @EnvironmentObject private var webAuthentication: WebAuthenticationStore
     @StateObject private var model = MyProfileViewModel()
     @State private var selectedVideo: SmolishVideo?
+    @State private var showAccountSwitcher = false
 
     private var shareURL: URL? {
         profile.handle.flatMap { URL(string: "https://smolish.com/@\($0)") }
@@ -129,6 +131,15 @@ struct MySmolishProfileView: View {
                         .buttonStyle(.bordered)
                     }
                     .padding(.horizontal)
+
+                    Button {
+                        showAccountSwitcher = true
+                    } label: {
+                        Label("Switch Smolish account", systemImage: "person.2")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.horizontal)
                 }
                 .padding(.bottom, 18)
 
@@ -175,7 +186,15 @@ struct MySmolishProfileView: View {
             }
         }
         .background(Color.smolishBlack)
-        .task { if let handle = profile.handle { await model.load(handle: handle) } }
+        .task {
+            if let handle = profile.handle { await model.load(handle: handle) }
+            await webAuthentication.loadAccounts()
+        }
+        .sheet(isPresented: $showAccountSwitcher) {
+            SmolishAccountSwitcherView()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .fullScreenCover(item: $selectedVideo) { video in
             ZStack(alignment: .topTrailing) {
                 VideoPageView(video: video, isActive: true, onRequiresSignIn: {})
@@ -194,12 +213,15 @@ struct MySmolishProfileView: View {
     }
 
     private var banner: some View {
-        AsyncImage(url: profile.bannerUrl) { image in
-            image.resizable().scaledToFill()
-        } placeholder: {
-            LinearGradient(colors: [.smolishBlue.opacity(0.85), .purple.opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        ZStack {
+            LinearGradient(colors: [.smolishBlue.opacity(0.55), .purple.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            if let bannerURL = profile.bannerUrl {
+                AsyncImage(url: bannerURL) { image in
+                    image.resizable().scaledToFit()
+                } placeholder: { ProgressView() }
+            }
         }
-        .frame(maxWidth: .infinity).frame(height: 150).clipped()
+        .frame(maxWidth: .infinity).frame(height: 104).clipped()
     }
 
     private var braincellsMetric: some View {
@@ -215,6 +237,69 @@ struct MySmolishProfileView: View {
         VStack(spacing: 2) {
             Text(value.formatted(.number.notation(.compactName))).font(.headline)
             Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct SmolishAccountSwitcherView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var webAuthentication: WebAuthenticationStore
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if webAuthentication.isLoadingAccounts && webAuthentication.accounts.isEmpty {
+                    ProgressView("Loading your accounts…")
+                } else if webAuthentication.accounts.isEmpty {
+                    ContentUnavailableView(
+                        "No additional accounts",
+                        systemImage: "person.2",
+                        description: Text("Add another account from the Smolish website, then refresh this list.")
+                    )
+                } else {
+                    List(webAuthentication.accounts) { account in
+                        Button {
+                            Task {
+                                await webAuthentication.switchAccount(account)
+                                if account.active == false, webAuthentication.errorMessage == nil { dismiss() }
+                            }
+                        } label: {
+                            HStack(spacing: 12) {
+                                CreatorAvatar(url: account.avatarUrl, size: 44)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(account.displayName).font(.headline)
+                                    Text(account.handle.map { "@\($0)" } ?? "No Smolish profile yet")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if webAuthentication.switchingAccountToken == account.sessionToken {
+                                    ProgressView()
+                                } else if account.active {
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.smolishBlue)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(account.active || webAuthentication.switchingAccountToken != nil)
+                    }
+                }
+            }
+            .navigationTitle("Switch account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Refresh") { Task { await webAuthentication.loadAccounts() } }
+                }
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+            }
+        }
+        .task { await webAuthentication.loadAccounts() }
+        .alert("Couldn’t switch account", isPresented: Binding(
+            get: { webAuthentication.errorMessage != nil },
+            set: { if !$0 { webAuthentication.errorMessage = nil } }
+        )) { Button("OK", role: .cancel) {} } message: {
+            Text(webAuthentication.errorMessage ?? "Please try again.")
         }
     }
 }
