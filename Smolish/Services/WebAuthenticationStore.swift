@@ -161,7 +161,12 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ sessionToken: accountToken })
           });
-          return JSON.stringify({ ok: response.ok, status: response.status });
+          const body = await response.json().catch(() => null);
+          return JSON.stringify({
+            ok: response.ok && !!body?.session,
+            status: response.status,
+            error: body?.message ?? body?.error ?? null
+          });
         } catch (error) {
           return JSON.stringify({ ok: false, status: 0, error: String(error) });
         }
@@ -179,7 +184,11 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
                 errorMessage = "That Smolish account could not be opened."
                 return false
             }
-            webView.reload()
+            guard await promoteMultiSessionCookie(for: account.sessionToken) else {
+                errorMessage = "Smolish switched the account but its browser cookie could not be activated."
+                return false
+            }
+            webView.reloadFromOrigin()
             for _ in 0..<20 {
                 try? await Task.sleep(for: .milliseconds(500))
                 if await checkSession(expectedHandle: account.handle) {
@@ -193,6 +202,30 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    private func promoteMultiSessionCookie(for sessionToken: String) async -> Bool {
+        let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
+        let cookies = await cookieStore.allCookies()
+        let suffix = "_multi-\(sessionToken.lowercased())"
+        guard let source = cookies.first(where: { $0.name.lowercased().hasSuffix(suffix) }),
+              let range = source.name.range(of: "_multi-", options: [.backwards, .caseInsensitive]) else {
+            return false
+        }
+        let primaryName = String(source.name[..<range.lowerBound])
+        var properties: [HTTPCookiePropertyKey: Any] = [
+            .name: primaryName,
+            .value: source.value,
+            .domain: source.domain,
+            .path: source.path,
+            .secure: "TRUE"
+        ]
+        if let expiresDate = source.expiresDate { properties[.expires] = expiresDate }
+        properties[HTTPCookiePropertyKey("HttpOnly")] = "TRUE"
+        guard let primaryCookie = HTTPCookie(properties: properties) else { return false }
+        await cookieStore.setCookie(primaryCookie)
+        let updated = await cookieStore.allCookies()
+        return updated.contains { $0.name == primaryName && $0.value == source.value }
     }
 
     func refreshBrowserSession() async {
