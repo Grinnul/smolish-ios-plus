@@ -117,6 +117,8 @@ struct VideoPageView: View {
             }
             HStack(spacing: 11) {
                 Label(video.viewsCount.formatted(.number.notation(.compactName)), systemImage: "play")
+                Label(video.authorBraincells.formatted(.number.notation(.compactName)), systemImage: "brain.head.profile")
+                    .foregroundStyle(Color.smolishBlue)
                 if video.aiGenerated { Label("AI", systemImage: "sparkles") }
                 if video.epilepsyWarning { Label("Flashing", systemImage: "bolt.trianglebadge.exclamationmark") }
             }

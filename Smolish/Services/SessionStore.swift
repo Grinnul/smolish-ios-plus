@@ -8,11 +8,21 @@ struct SmolishProfile: Decodable, Sendable {
     let displayName: String?
     let avatar: URL?
     let avatarUrl: URL?
+    let bannerUrl: URL?
+    let bio: String?
+    let followersCount: Int
+    let followingCount: Int
+    let videosCount: Int
+    let braincells: Int
+    let braincellsProvisional: Bool
 
     var displayNameText: String { displayName ?? name ?? handle ?? "Smolish user" }
     var displayAvatar: URL? { avatar ?? avatarUrl }
 
-    private enum CodingKeys: String, CodingKey { case id, userId, handle, name, displayName, avatar, avatarUrl }
+    private enum CodingKeys: String, CodingKey {
+        case id, userId, handle, name, displayName, avatar, avatarUrl, bannerUrl, banner
+        case bio, followersCount, followingCount, videosCount, braincells, braincellsProvisional
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -23,6 +33,14 @@ struct SmolishProfile: Decodable, Sendable {
         displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
         avatar = try container.decodeIfPresent(URL.self, forKey: .avatar)
         avatarUrl = try container.decodeIfPresent(URL.self, forKey: .avatarUrl)
+        bannerUrl = try container.decodeIfPresent(URL.self, forKey: .bannerUrl)
+            ?? container.decodeIfPresent(URL.self, forKey: .banner)
+        bio = try container.decodeIfPresent(String.self, forKey: .bio)
+        followersCount = try container.decodeIfPresent(Int.self, forKey: .followersCount) ?? 0
+        followingCount = try container.decodeIfPresent(Int.self, forKey: .followingCount) ?? 0
+        videosCount = try container.decodeIfPresent(Int.self, forKey: .videosCount) ?? 0
+        braincells = try container.decodeIfPresent(Int.self, forKey: .braincells) ?? 0
+        braincellsProvisional = try container.decodeIfPresent(Bool.self, forKey: .braincellsProvisional) ?? false
     }
 }
 

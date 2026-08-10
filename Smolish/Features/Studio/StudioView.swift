@@ -60,6 +60,18 @@ struct StudioView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 18) {
+                            if let profile = session.profile {
+                                HStack {
+                                    Label("Creator braincells", systemImage: "brain.head.profile")
+                                    Spacer()
+                                    Text(profile.braincells.formatted(.number.notation(.compactName)))
+                                        .font(.title3.bold())
+                                }
+                                .foregroundStyle(Color.smolishBlue)
+                                .padding(16)
+                                .background(Color.smolishBlue.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                            }
+
                             Picker("Range", selection: $model.selectedDays) {
                                 Text("7D").tag(7)
                                 Text("30D").tag(30)

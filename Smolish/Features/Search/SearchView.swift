@@ -64,8 +64,12 @@ private struct SearchUserRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(user.displayName).font(.headline).lineLimit(1)
                 Text("@\(user.handle)").font(.subheadline).foregroundStyle(.secondary)
-                Text("\(user.followersCount.formatted(.number.notation(.compactName))) followers · \(user.videosCount.formatted()) videos")
-                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text("\(user.followersCount.formatted(.number.notation(.compactName))) followers")
+                    Label(user.braincells.formatted(.number.notation(.compactName)), systemImage: "brain.head.profile")
+                        .foregroundStyle(Color.smolishBlue)
+                }
+                .font(.caption)
             }
             Spacer()
             Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)

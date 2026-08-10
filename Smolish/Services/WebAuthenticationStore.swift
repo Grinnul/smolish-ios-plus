@@ -34,7 +34,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         if webView.url?.host?.hasSuffix("smolish.com") == true {
             webView.reload()
         } else {
-            webView.load(URLRequest(url: URL(string: "https://smolish.com/profile")!))
+            webView.load(URLRequest(url: URL(string: "https://smolish.com/search")!))
         }
         startPolling()
     }
@@ -83,15 +83,13 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
           if (!payload?.user || !payload?.session) {
             return JSON.stringify({ error: `Session check returned ${response.status}` });
           }
-          const user = payload.user;
+          const profileResponse = await fetch('/api/profile', { credentials: 'include', cache: 'no-store' });
+          if (!profileResponse.ok) {
+            return JSON.stringify({ error: `Profile check returned ${profileResponse.status}` });
+          }
+          const profile = await profileResponse.json();
           return JSON.stringify({
-            profile: {
-              id: user.id ?? null,
-              handle: user.handle ?? user.username ?? null,
-              name: user.name ?? null,
-              displayName: user.displayName ?? user.name ?? null,
-              avatarUrl: user.avatarUrl ?? user.avatar ?? user.image ?? null
-            },
+            profile,
             userAgent: navigator.userAgent
           });
         } catch (error) {
