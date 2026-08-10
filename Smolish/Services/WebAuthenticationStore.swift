@@ -145,14 +145,14 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         }
     }
 
-    func switchAccount(_ account: WebAccount) async {
-        guard !account.active, switchingAccountToken == nil else { return }
+    func switchAccount(_ account: WebAccount) async -> Bool {
+        guard !account.active, switchingAccountToken == nil else { return false }
         switchingAccountToken = account.sessionToken
         errorMessage = nil
         defer { switchingAccountToken = nil }
         guard await ensureBrowserReady() else {
             errorMessage = "The Smolish browser session is not ready. Please try again."
-            return
+            return false
         }
         let script = """
         try {
@@ -177,13 +177,41 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
                   let result = try? JSONDecoder().decode(WebAccountSwitchResult.self, from: data),
                   result.ok else {
                 errorMessage = "That Smolish account could not be opened."
-                return
+                return false
             }
             webView.reload()
-            try? await Task.sleep(for: .milliseconds(500))
-            await checkSession()
-            await loadAccounts()
-        } catch { errorMessage = error.localizedDescription }
+            for _ in 0..<20 {
+                try? await Task.sleep(for: .milliseconds(500))
+                if await checkSession(expectedHandle: account.handle) {
+                    await loadAccounts()
+                    return true
+                }
+            }
+            errorMessage = "Smolish did not activate @\(account.handle ?? account.displayName). Please try again."
+            return false
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func refreshBrowserSession() async {
+        guard await ensureBrowserReady() else { return }
+        let script = """
+        try {
+          var response = await fetch('/api/auth/get-session', { credentials: 'include', cache: 'no-store' });
+          if (!response.ok) return false;
+          const auth = await response.json();
+          const payload = auth?.data ?? auth;
+          if (payload?.needsRefresh || payload?.session?.needsRefresh) {
+            response = await fetch('/api/auth/get-session', {
+              method: 'POST', credentials: 'include', cache: 'no-store'
+            });
+          }
+          return response.ok;
+        } catch (_) { return false; }
+        """
+        _ = try? await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
     }
 
     func clearWebSession() async {
@@ -206,10 +234,11 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         }
     }
 
-    private func checkSession() async {
+    @discardableResult
+    private func checkSession(expectedHandle: String? = nil) async -> Bool {
         guard !isPreparingAddAccount,
               !isCheckingSession,
-              webView.url?.host?.hasSuffix("smolish.com") == true else { return }
+              webView.url?.host?.hasSuffix("smolish.com") == true else { return false }
         isCheckingSession = true
         defer { isCheckingSession = false }
         statusMessage = "Checking Smolish session…"
@@ -243,15 +272,20 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
             ) as? String,
                   let data = json.data(using: .utf8) else {
                 statusMessage = "Could not read the browser session"
-                return
+                return false
             }
             if let failure = try? JSONDecoder().decode(WebSessionFailure.self, from: data) {
                 statusMessage = failure.error
-                return
+                return false
             }
             guard let envelope = try? JSONDecoder().decode(WebProfileEnvelope.self, from: data) else {
                 statusMessage = "Smolish returned an unreadable session"
-                return
+                return false
+            }
+            if let expectedHandle,
+               envelope.profile.handle?.caseInsensitiveCompare(expectedHandle) != .orderedSame {
+                statusMessage = "Waiting for @\(expectedHandle) to become active…"
+                return false
             }
             let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
                 .filter { $0.domain.lowercased().hasSuffix("smolish.com") }
@@ -261,7 +295,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
                 .joined(separator: "; ")
             guard !cookies.isEmpty, let sessionStore else {
                 statusMessage = "Signed in, waiting for browser cookies…"
-                return
+                return false
             }
             await loadAccounts()
             if requiresNewAccount {
@@ -270,7 +304,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
                     || envelope.profile.id != accountBeingAddedFromProfileID
                 guard hasNewSession && hasDifferentProfile else {
                     statusMessage = "Waiting for a newly added Smolish account…"
-                    return
+                    return false
                 }
             }
             statusMessage = "Transferring session to Smolish V2…"
@@ -282,9 +316,11 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
             statusMessage = "Signed in"
             stopPolling()
             onSignIn?()
+            return true
         } catch {
             statusMessage = "Browser bridge failed"
             errorMessage = error.localizedDescription
+            return false
         }
     }
 }

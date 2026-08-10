@@ -276,8 +276,7 @@ struct SmolishAccountSwitcherView: View {
                             ForEach(webAuthentication.accounts) { account in
                                 Button {
                                     Task {
-                                        await webAuthentication.switchAccount(account)
-                                        if account.active == false, webAuthentication.errorMessage == nil { dismiss() }
+                                        if await webAuthentication.switchAccount(account) { dismiss() }
                                     }
                                 } label: {
                                     HStack(spacing: 12) {
