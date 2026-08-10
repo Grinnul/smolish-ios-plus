@@ -76,31 +76,45 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         defer { isCheckingSession = false }
         statusMessage = "Checking Smolish session…"
         let script = """
-        (async () => {
-          try {
-            const response = await fetch('/api/auth/get-session', { credentials: 'include', cache: 'no-store' });
-            if (!response.ok) return null;
-            const auth = await response.json();
-            if (!auth || !auth.user || !auth.session) return null;
-            const user = auth.user;
-            return JSON.stringify({
-              profile: {
-                id: user.id ?? null,
-                handle: user.handle ?? user.username ?? null,
-                name: user.name ?? null,
-                displayName: user.displayName ?? user.name ?? null,
-                avatarUrl: user.avatarUrl ?? user.avatar ?? user.image ?? null
-              },
-              userAgent: navigator.userAgent
-            });
-          } catch (_) { return null; }
-        })()
+        try {
+          const response = await fetch('/api/auth/get-session', { credentials: 'include', cache: 'no-store' });
+          const auth = response.ok ? await response.json() : null;
+          const payload = auth?.data ?? auth;
+          if (!payload?.user || !payload?.session) {
+            return JSON.stringify({ error: `Session check returned ${response.status}` });
+          }
+          const user = payload.user;
+          return JSON.stringify({
+            profile: {
+              id: user.id ?? null,
+              handle: user.handle ?? user.username ?? null,
+              name: user.name ?? null,
+              displayName: user.displayName ?? user.name ?? null,
+              avatarUrl: user.avatarUrl ?? user.avatar ?? user.image ?? null
+            },
+            userAgent: navigator.userAgent
+          });
+        } catch (error) {
+          return JSON.stringify({ error: String(error) });
+        }
         """
         do {
-            guard let json = try await webView.evaluateJavaScript(script) as? String,
-                  let data = json.data(using: .utf8),
-                  let envelope = try? JSONDecoder().decode(WebProfileEnvelope.self, from: data) else {
-                statusMessage = "Signed-in session not detected yet…"
+            guard let json = try await webView.callAsyncJavaScript(
+                script,
+                arguments: [:],
+                in: nil,
+                contentWorld: .page
+            ) as? String,
+                  let data = json.data(using: .utf8) else {
+                statusMessage = "Could not read the browser session"
+                return
+            }
+            if let failure = try? JSONDecoder().decode(WebSessionFailure.self, from: data) {
+                statusMessage = failure.error
+                return
+            }
+            guard let envelope = try? JSONDecoder().decode(WebProfileEnvelope.self, from: data) else {
+                statusMessage = "Smolish returned an unreadable session"
                 return
             }
             let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
@@ -120,6 +134,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
             stopPolling()
             onSignIn?()
         } catch {
+            statusMessage = "Browser bridge failed"
             errorMessage = error.localizedDescription
         }
     }
@@ -164,6 +179,10 @@ extension WebAuthenticationStore: WKUIDelegate {
 private struct WebProfileEnvelope: Decodable {
     let profile: SmolishProfile
     let userAgent: String
+}
+
+private struct WebSessionFailure: Decodable {
+    let error: String
 }
 
 struct PersistentWebView: UIViewRepresentable {
