@@ -70,6 +70,15 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    func acceptWebSession(cookie: String, userAgent: String, profile: SmolishProfile) throws {
+        guard !cookie.isEmpty, !userAgent.isEmpty else { throw APIError.invalidResponse }
+        try KeychainCookieStore.save(cookie)
+        try BrowserUserAgentStore.save(userAgent)
+        self.profile = profile
+        isAuthenticated = true
+        authenticationError = nil
+    }
+
     func verifyStoredCookie() async {
         guard KeychainCookieStore.load() != nil else {
             isAuthenticated = false
@@ -113,7 +122,7 @@ final class SessionStore: ObservableObject {
 }
 
 enum KeychainCookieStore {
-    private static let service = "com.smolish.ios.session"
+    private static let service = "com.smolish.ios.v2.session"
     private static let account = "cookie-header"
 
     static func save(_ cookie: String) throws {
@@ -157,7 +166,7 @@ enum KeychainCookieStore {
 }
 
 enum BrowserUserAgentStore {
-    private static let service = "com.smolish.ios.session"
+    private static let service = "com.smolish.ios.v2.session"
     private static let account = "browser-user-agent"
 
     static func save(_ userAgent: String) throws {

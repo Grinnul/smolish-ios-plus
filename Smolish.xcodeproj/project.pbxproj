@@ -23,6 +23,7 @@
 		A0010000000000000000000E /* StudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000F /* StudioView.swift */; };
 		A0010000000000000000000F /* CommentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000010 /* CommentsView.swift */; };
 		A00100000000000000000010 /* SmolishIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000011 /* SmolishIcon.icon */; };
+		A00100000000000000000011 /* WebAuthenticationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000012 /* WebAuthenticationStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +45,7 @@
 		B0010000000000000000000F /* StudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioView.swift; sourceTree = "<group>"; };
 		B00100000000000000000010 /* CommentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsView.swift; sourceTree = "<group>"; };
 		B00100000000000000000011 /* SmolishIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer; path = SmolishIcon.icon; sourceTree = "<group>"; };
+		B00100000000000000000012 /* WebAuthenticationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuthenticationStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -94,6 +96,7 @@
 			children = (
 				B00100000000000000000004 /* APIClient.swift */,
 				B0010000000000000000000D /* SessionStore.swift */,
+				B00100000000000000000012 /* WebAuthenticationStore.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -253,6 +256,7 @@
 				A0010000000000000000000D /* NotificationsView.swift in Sources */,
 				A0010000000000000000000E /* StudioView.swift in Sources */,
 				A0010000000000000000000F /* CommentsView.swift in Sources */,
+				A00100000000000000000011 /* WebAuthenticationStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -334,8 +338,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.smolish.ios;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.smolish.ios.v2;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -361,8 +365,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.smolish.ios;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.smolish.ios.v2;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
