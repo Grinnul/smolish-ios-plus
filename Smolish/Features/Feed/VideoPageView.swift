@@ -225,7 +225,12 @@ private struct LoopingVideoPlayer: UIViewRepresentable {
 
     func updateUIView(_ view: PlayerView, context: Context) {
         context.coordinator.player?.isMuted = isMuted
-        shouldPlay ? context.coordinator.player?.play() : context.coordinator.player?.pause()
+        if shouldPlay {
+            if !isMuted { MediaAudioSession.activate() }
+            context.coordinator.player?.play()
+        } else {
+            context.coordinator.player?.pause()
+        }
     }
 
     static func dismantleUIView(_ view: PlayerView, coordinator: Coordinator) {
@@ -243,5 +248,22 @@ private struct LoopingVideoPlayer: UIViewRepresentable {
     final class PlayerView: UIView {
         override class var layerClass: AnyClass { AVPlayerLayer.self }
         var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    }
+}
+
+private enum MediaAudioSession {
+    private static var isConfigured = false
+
+    static func activate() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            if !isConfigured {
+                try session.setCategory(.playback, mode: .moviePlayback)
+                isConfigured = true
+            }
+            try session.setActive(true)
+        } catch {
+            // AVPlayer will retry activation when the current interruption ends.
+        }
     }
 }
