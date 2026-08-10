@@ -384,13 +384,14 @@ struct WebSignInView: View {
                         Label("Your password stays on smolish.com", systemImage: "lock.shield")
                             .font(.footnote.weight(.medium)).foregroundStyle(.green)
                         Button("Open Smolish Search") {
-                            hasStarted = true
                             Task {
                                 if mode == .addAccount {
                                     await webAuthentication.startAddingAccount(session: session)
                                 } else {
                                     webAuthentication.start(session: session)
                                 }
+                                webAuthentication.onSignIn = { dismiss() }
+                                hasStarted = true
                             }
                         }
                         .buttonStyle(.borderedProminent).controlSize(.large)
@@ -414,7 +415,11 @@ struct WebSignInView: View {
             }
         }
         .onAppear {
-            webAuthentication.onSignIn = { dismiss() }
+            if mode == .initial {
+                webAuthentication.onSignIn = { dismiss() }
+            } else {
+                webAuthentication.onSignIn = nil
+            }
         }
         .onDisappear {
             webAuthentication.stopPolling()

@@ -18,6 +18,8 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     private var didComplete = false
     private var requiresNewAccount = false
     private var knownAccountTokens: Set<String> = []
+    private var accountBeingAddedFromProfileID: String?
+    private var isPreparingAddAccount = false
     var onSignIn: (() -> Void)?
 
     override init() {
@@ -37,6 +39,7 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
         didComplete = false
         requiresNewAccount = false
         knownAccountTokens = []
+        accountBeingAddedFromProfileID = nil
         errorMessage = nil
         statusMessage = "Waiting for sign-in…"
         if webView.url?.host?.hasSuffix("smolish.com") == true {
@@ -48,8 +51,12 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     }
 
     func startAddingAccount(session: SessionStore) async {
+        isPreparingAddAccount = true
+        defer { isPreparingAddAccount = false }
         sessionStore = session
+        accountBeingAddedFromProfileID = session.profile?.id
         errorMessage = nil
+        stopPolling()
         await loadAccounts()
         knownAccountTokens = Set(accounts.map(\.sessionToken))
         requiresNewAccount = true
@@ -154,7 +161,9 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     }
 
     private func checkSession() async {
-        guard !isCheckingSession, webView.url?.host?.hasSuffix("smolish.com") == true else { return }
+        guard !isPreparingAddAccount,
+              !isCheckingSession,
+              webView.url?.host?.hasSuffix("smolish.com") == true else { return }
         isCheckingSession = true
         defer { isCheckingSession = false }
         statusMessage = "Checking Smolish session…"
@@ -209,15 +218,21 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
                 return
             }
             await loadAccounts()
-            if requiresNewAccount && !accounts.contains(where: { !knownAccountTokens.contains($0.sessionToken) }) {
-                statusMessage = "Waiting for a newly added Smolish account…"
-                return
+            if requiresNewAccount {
+                let hasNewSession = accounts.contains { !knownAccountTokens.contains($0.sessionToken) }
+                let hasDifferentProfile = accountBeingAddedFromProfileID == nil
+                    || envelope.profile.id != accountBeingAddedFromProfileID
+                guard hasNewSession && hasDifferentProfile else {
+                    statusMessage = "Waiting for a newly added Smolish account…"
+                    return
+                }
             }
             statusMessage = "Transferring session to Smolish V2…"
             try sessionStore.acceptWebSession(cookie: cookies, userAgent: envelope.userAgent, profile: envelope.profile)
             didComplete = true
             requiresNewAccount = false
             knownAccountTokens = []
+            accountBeingAddedFromProfileID = nil
             statusMessage = "Signed in"
             stopPolling()
             onSignIn?()
