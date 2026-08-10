@@ -16,6 +16,8 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     private weak var sessionStore: SessionStore?
     private var pollingTask: Task<Void, Never>?
     private var didComplete = false
+    private var requiresNewAccount = false
+    private var knownAccountTokens: Set<String> = []
     var onSignIn: (() -> Void)?
 
     override init() {
@@ -33,10 +35,28 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
     func start(session: SessionStore) {
         sessionStore = session
         didComplete = false
+        requiresNewAccount = false
+        knownAccountTokens = []
         errorMessage = nil
         statusMessage = "Waiting for sign-in…"
         if webView.url?.host?.hasSuffix("smolish.com") == true {
             webView.reload()
+        } else {
+            webView.load(URLRequest(url: URL(string: "https://smolish.com/search")!))
+        }
+        startPolling()
+    }
+
+    func startAddingAccount(session: SessionStore) async {
+        sessionStore = session
+        errorMessage = nil
+        await loadAccounts()
+        knownAccountTokens = Set(accounts.map(\.sessionToken))
+        requiresNewAccount = true
+        didComplete = false
+        statusMessage = "Tap the profile icon, open Switch account, then add an account"
+        if webView.url?.host?.hasSuffix("smolish.com") == true {
+            webView.load(URLRequest(url: URL(string: "https://smolish.com/search")!))
         } else {
             webView.load(URLRequest(url: URL(string: "https://smolish.com/search")!))
         }
@@ -188,12 +208,18 @@ final class WebAuthenticationStore: NSObject, ObservableObject {
                 statusMessage = "Signed in, waiting for browser cookies…"
                 return
             }
+            await loadAccounts()
+            if requiresNewAccount && !accounts.contains(where: { !knownAccountTokens.contains($0.sessionToken) }) {
+                statusMessage = "Waiting for a newly added Smolish account…"
+                return
+            }
             statusMessage = "Transferring session to Smolish V2…"
             try sessionStore.acceptWebSession(cookie: cookies, userAgent: envelope.userAgent, profile: envelope.profile)
             didComplete = true
+            requiresNewAccount = false
+            knownAccountTokens = []
             statusMessage = "Signed in"
             stopPolling()
-            await loadAccounts()
             onSignIn?()
         } catch {
             statusMessage = "Browser bridge failed"

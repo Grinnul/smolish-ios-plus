@@ -244,6 +244,7 @@ struct MySmolishProfileView: View {
 struct SmolishAccountSwitcherView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var webAuthentication: WebAuthenticationStore
+    @State private var showAddAccount = false
 
     var body: some View {
         NavigationStack {
@@ -257,31 +258,48 @@ struct SmolishAccountSwitcherView: View {
                         description: Text("Add another account from the Smolish website, then refresh this list.")
                     )
                 } else {
-                    List(webAuthentication.accounts) { account in
-                        Button {
-                            Task {
-                                await webAuthentication.switchAccount(account)
-                                if account.active == false, webAuthentication.errorMessage == nil { dismiss() }
-                            }
-                        } label: {
-                            HStack(spacing: 12) {
-                                CreatorAvatar(url: account.avatarUrl, size: 44)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(account.displayName).font(.headline)
-                                    Text(account.handle.map { "@\($0)" } ?? "No Smolish profile yet")
-                                        .font(.caption).foregroundStyle(.secondary)
+                    List {
+                        Section {
+                            ForEach(webAuthentication.accounts) { account in
+                                Button {
+                                    Task {
+                                        await webAuthentication.switchAccount(account)
+                                        if account.active == false, webAuthentication.errorMessage == nil { dismiss() }
+                                    }
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        CreatorAvatar(url: account.avatarUrl, size: 44)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(account.displayName).font(.headline)
+                                            Text(account.handle.map { "@\($0)" } ?? "No Smolish profile yet")
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if webAuthentication.switchingAccountToken == account.sessionToken {
+                                            ProgressView()
+                                        } else if account.active {
+                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.smolishBlue)
+                                        }
+                                    }
+                                    .contentShape(Rectangle())
                                 }
-                                Spacer()
-                                if webAuthentication.switchingAccountToken == account.sessionToken {
-                                    ProgressView()
-                                } else if account.active {
-                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.smolishBlue)
-                                }
+                                .buttonStyle(.plain)
+                                .disabled(account.active || webAuthentication.switchingAccountToken != nil)
                             }
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
-                        .disabled(account.active || webAuthentication.switchingAccountToken != nil)
+                        Section {
+                            Button {
+                                showAddAccount = true
+                            } label: {
+                                Label("Add another account", systemImage: "person.badge.plus")
+                                    .font(.headline).foregroundStyle(Color.smolishBlue)
+                            }
+                            .disabled(webAuthentication.accounts.count >= 10)
+                        } footer: {
+                            Text(webAuthentication.accounts.count >= 10
+                                 ? "Smolish allows up to 10 connected accounts."
+                                 : "Stay signed in and switch without entering your password again.")
+                        }
                     }
                 }
             }
@@ -295,6 +313,11 @@ struct SmolishAccountSwitcherView: View {
             }
         }
         .task { await webAuthentication.loadAccounts() }
+        .sheet(isPresented: $showAddAccount, onDismiss: {
+            Task { await webAuthentication.loadAccounts() }
+        }) {
+            WebSignInView(mode: .addAccount)
+        }
         .alert("Couldn’t switch account", isPresented: Binding(
             get: { webAuthentication.errorMessage != nil },
             set: { if !$0 { webAuthentication.errorMessage = nil } }
@@ -304,11 +327,21 @@ struct SmolishAccountSwitcherView: View {
     }
 }
 
+enum WebSignInMode: Equatable {
+    case initial
+    case addAccount
+}
+
 struct WebSignInView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var webAuthentication: WebAuthenticationStore
     @State private var hasStarted = false
+    let mode: WebSignInMode
+
+    init(mode: WebSignInMode = .initial) {
+        self.mode = mode
+    }
 
     var body: some View {
         NavigationStack {
@@ -342,15 +375,23 @@ struct WebSignInView: View {
                 } else {
                     VStack(spacing: 22) {
                         SmolishLogo(size: 76)
-                        Text("Connect your Smolish account").font(.title2.bold())
-                        Text("We’ll open the Smolish Search page. Tap the profile icon on the website, then sign in using Google, email, or your preferred method. Once Smolish confirms the login, you’ll return here automatically.")
+                        Text(mode == .addAccount ? "Add another account" : "Connect your Smolish account").font(.title2.bold())
+                        Text(mode == .addAccount
+                             ? "We’ll open Smolish Search. Tap the profile icon, choose Switch account, then use Add to sign in with Google, email, or your preferred method."
+                             : "We’ll open the Smolish Search page. Tap the profile icon on the website, then sign in using Google, email, or your preferred method. Once Smolish confirms the login, you’ll return here automatically.")
                             .multilineTextAlignment(.center)
                             .foregroundStyle(.secondary)
                         Label("Your password stays on smolish.com", systemImage: "lock.shield")
                             .font(.footnote.weight(.medium)).foregroundStyle(.green)
                         Button("Open Smolish Search") {
                             hasStarted = true
-                            webAuthentication.start(session: session)
+                            Task {
+                                if mode == .addAccount {
+                                    await webAuthentication.startAddingAccount(session: session)
+                                } else {
+                                    webAuthentication.start(session: session)
+                                }
+                            }
                         }
                         .buttonStyle(.borderedProminent).controlSize(.large)
                     }
