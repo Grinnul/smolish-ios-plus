@@ -3,9 +3,10 @@ import SwiftUI
 struct RootTabView: View {
     @EnvironmentObject private var notifications: NotificationCenterStore
     @State private var selectedTab = Tab.feed
+    @EnvironmentObject private var settings: Settings
 
     private enum Tab: Hashable { case feed, search, alerts, studio, profile }
-
+    
     var body: some View {
         TabView(selection: $selectedTab) {
             FeedView(isTabActive: selectedTab == .feed)
@@ -31,5 +32,7 @@ struct RootTabView: View {
         }
         .toolbarBackground(.ultraThinMaterial, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
+
+        }
     }
-}
+

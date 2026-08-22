@@ -110,6 +110,7 @@ final class CommentsViewModel: ObservableObject {
 struct CommentsView: View {
     @EnvironmentObject private var session: SessionStore
     @StateObject private var model: CommentsViewModel
+    @StateObject private var settings = Settings()
     @FocusState private var composerFocused: Bool
 
     init(videoID: String) { _model = StateObject(wrappedValue: CommentsViewModel(videoID: videoID)) }
@@ -191,7 +192,7 @@ struct CommentsView: View {
                     .background(.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 18)).disabled(!session.isAuthenticated)
                 Button { Task { await model.post() } } label: {
                     Image(systemName: "arrow.up").font(.headline.bold()).frame(width: 40, height: 40)
-                        .background(Color.smolishBlue, in: Circle()).foregroundStyle(.white)
+                        .background(settings.accent, in: Circle()).foregroundStyle(.white)
                 }
                 .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isPosting || !session.isAuthenticated)
             }
@@ -211,7 +212,7 @@ struct CommentsView: View {
                 HStack(spacing: 6) {
                     Text(comment.authorName).font(.subheadline.bold()).lineLimit(1)
                     Text("@\(comment.authorHandle)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    if pinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(Color.smolishBlue) }
+                    if pinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(settings.accent) }
                 }
                 Text(comment.body).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 14) {

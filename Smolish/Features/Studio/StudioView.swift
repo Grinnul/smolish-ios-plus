@@ -44,6 +44,7 @@ final class StudioViewModel: ObservableObject {
 struct StudioView: View {
     @EnvironmentObject private var session: SessionStore
     @StateObject private var model = StudioViewModel()
+    @StateObject private var settings = Settings()
     @State private var showUpload = false
 
     var body: some View {
@@ -67,9 +68,9 @@ struct StudioView: View {
                                     Text(profile.braincells.formatted(.number.notation(.compactName)))
                                         .font(.title3.bold())
                                 }
-                                .foregroundStyle(Color.smolishBlue)
+                                .foregroundStyle(settings.accent)
                                 .padding(16)
-                                .background(Color.smolishBlue.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                                .background(settings.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
                             }
 
                             Picker("Range", selection: $model.selectedDays) {
@@ -78,6 +79,7 @@ struct StudioView: View {
                                 Text("90D").tag(90)
                             }
                             .pickerStyle(.segmented)
+                            .glassEffect(.regular.interactive())
 
                             analyticsCards
 
@@ -86,9 +88,9 @@ struct StudioView: View {
                                     Text("Views over time").font(.headline)
                                     Chart(model.analytics.points) { point in
                                         AreaMark(x: .value("Date", point.date), y: .value("Views", point.views))
-                                            .foregroundStyle(LinearGradient(colors: [.smolishBlue.opacity(0.55), .smolishBlue.opacity(0.04)], startPoint: .top, endPoint: .bottom))
+                                            .foregroundStyle(LinearGradient(colors: [settings.accent.opacity(0.55), settings.accent.opacity(0.04)], startPoint: .top, endPoint: .bottom))
                                         LineMark(x: .value("Date", point.date), y: .value("Views", point.views))
-                                            .foregroundStyle(Color.smolishBlue).lineStyle(.init(lineWidth: 3, lineCap: .round))
+                                            .foregroundStyle(settings.accent).lineStyle(.init(lineWidth: 3, lineCap: .round))
                                     }
                                     .frame(height: 190)
                                     .chartYAxis { AxisMarks(position: .leading) }
@@ -161,6 +163,8 @@ struct StudioView: View {
                     .padding(16)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
                     .overlay(RoundedRectangle(cornerRadius: 20).stroke(.white.opacity(0.08)))
+                    
+                    
                 }
             }
         }

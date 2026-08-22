@@ -1,6 +1,7 @@
 import AVFoundation
 import SwiftUI
 
+
 struct VideoPageView: View {
     let video: SmolishVideo
     let isActive: Bool
@@ -8,13 +9,15 @@ struct VideoPageView: View {
 
     @EnvironmentObject private var session: SessionStore
     @State private var isMuted = false
-    @State private var isPaused = false
+    @EnvironmentObject private var settings: Settings
+    @StateObject private var model = FeedViewModel()
     @State private var liked: Bool
     @State private var saved: Bool
     @State private var following: Bool
     @State private var isDescriptionExpanded = false
     @State private var showComments = false
     @State private var showCreator = false
+    @State private var showHeart = false
     @State private var actionError: String?
 
     init(video: SmolishVideo, isActive: Bool, onRequiresSignIn: @escaping () -> Void) {
@@ -28,8 +31,8 @@ struct VideoPageView: View {
 
     var body: some View {
         ZStack {
-            LoopingVideoPlayer(url: video.src, shouldPlay: isActive && !isPaused, isMuted: isMuted)
-
+            LoopingVideoPlayer(url: video.src, shouldPlay: isActive && !model.isPaused, isMuted: isMuted)
+            
             LinearGradient(
                 colors: [.clear, .clear, .black.opacity(0.82)],
                 startPoint: .top,
@@ -50,9 +53,13 @@ struct VideoPageView: View {
         }
         .clipped()
         .contentShape(Rectangle())
-        .onTapGesture { isPaused.toggle() }
+        .onTapGesture { model.isPaused.toggle() }
+        .onTapGesture(count: 2) {
+            toggleLike()
+            triggerHeart()
+        }
         .overlay {
-            if isPaused {
+            if model.isPaused {
                 Image(systemName: "play.fill")
                     .font(.title2.weight(.bold))
                     .padding(17)
@@ -60,9 +67,19 @@ struct VideoPageView: View {
                     .transition(.scale.combined(with: .opacity))
                     .allowsHitTesting(false)
             }
+            if showHeart {
+                Image(systemName: liked ? "heart.fill" : "heart.slash.fill")
+                    .resizable()
+                    .frame(width: 120, height: 120)
+                    .foregroundColor(.red)
+                    .scaleEffect(showHeart ? 1.0 : 0.5)
+                    .opacity(showHeart ? 1.0 : 0.0)
+                    .transition(.scale.combined(with: .opacity))
+                    .allowsHitTesting(false)
+            }
         }
-        .animation(.snappy, value: isPaused)
-        .onChange(of: isActive) { _, active in if !active { isPaused = false } }
+        .animation(.snappy, value: model.isPaused)
+        .onChange(of: isActive) { _, active in if !active { model.isPaused = false } }
         .sheet(isPresented: $showComments) {
             CommentsView(videoID: video.id)
                 .presentationDetents([.medium, .large])
@@ -102,7 +119,7 @@ struct VideoPageView: View {
                 } label: {
                     Image(systemName: following ? "checkmark" : "plus")
                         .font(.caption.bold()).frame(width: 26, height: 26)
-                        .background(following ? Color.white.opacity(0.18) : Color.smolishBlue, in: Circle())
+                        .background(following ? Color.white.opacity(0.18) : settings.accent, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(following ? "Following" : "Follow")
@@ -118,7 +135,7 @@ struct VideoPageView: View {
             HStack(spacing: 11) {
                 Label(video.viewsCount.formatted(.number.notation(.compactName)), systemImage: "play")
                 Label(video.authorBraincells.formatted(.number.notation(.compactName)), systemImage: "brain.head.profile")
-                    .foregroundStyle(Color.smolishBlue)
+                    .foregroundStyle(settings.accent)
                 if video.aiGenerated { Label("AI", systemImage: "sparkles") }
                 if video.epilepsyWarning { Label("Flashing", systemImage: "bolt.trianglebadge.exclamationmark") }
             }
@@ -149,15 +166,24 @@ struct VideoPageView: View {
                 Image(systemName: "ellipsis").frame(width: 30, height: 30)
             }
         }
-        .font(.title2.weight(.medium))
-        .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.65), radius: 3)
         .padding(.horizontal, 10)
         .padding(.vertical, 14)
-        .background(.black.opacity(0.30), in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.18)))
+        .glassEffect(.regular.interactive())
+        .font(.title2.weight(.medium))
+        .foregroundStyle(.white)
     }
-
+    private func triggerHeart() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.5)) {
+            showHeart = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            withAnimation(.easeOut(duration: 0.3)) {
+                showHeart = false
+            }
+        }
+    }
+    
+    
     private var displayedLikes: Int {
         video.likesCount + (liked == video.viewerLiked ? 0 : (liked ? 1 : -1))
     }
@@ -198,26 +224,26 @@ struct VideoPageView: View {
 
     private func avatar(url: URL?, size: CGFloat) -> some View {
         AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: {
-            Color.smolishBlue.overlay(Image(systemName: "person.fill").foregroundStyle(.white))
+            settings.accent.overlay(Image(systemName: "person.fill").foregroundStyle(.white))
         }
         .frame(width: size, height: size).clipShape(Circle())
         .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
     }
 }
 
-private struct LoopingVideoPlayer: UIViewRepresentable {
+struct LoopingVideoPlayer: UIViewRepresentable {
     let url: URL
     let shouldPlay: Bool
     let isMuted: Bool
-
+    @StateObject var model = FeedViewModel()
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> PlayerView {
         let view = PlayerView()
         let item = AVPlayerItem(url: url)
-        let player = AVQueuePlayer(playerItem: item)
+        let player = AVQueuePlayer()
         context.coordinator.player = player
-        context.coordinator.looper = AVPlayerLooper(player: player, templateItem: item)
+        context.coordinator.looper = AVPlayerLooper(player: player,templateItem: item)
         view.playerLayer.player = player
         view.playerLayer.videoGravity = .resizeAspectFill
         return view
@@ -226,8 +252,12 @@ private struct LoopingVideoPlayer: UIViewRepresentable {
     func updateUIView(_ view: PlayerView, context: Context) {
         context.coordinator.player?.isMuted = isMuted
         if shouldPlay {
-            if !isMuted { MediaAudioSession.activate() }
-            context.coordinator.player?.play()
+            Task {
+                model.isPaused = true
+                try? await Task.sleep(for: .milliseconds(1))
+                model.isPaused = false
+            }
+            context.coordinator.playWhenReady()
         } else {
             context.coordinator.player?.pause()
         }
@@ -235,14 +265,41 @@ private struct LoopingVideoPlayer: UIViewRepresentable {
 
     static func dismantleUIView(_ view: PlayerView, coordinator: Coordinator) {
         coordinator.player?.pause()
+
+        coordinator.looper?.disableLooping()
         coordinator.looper = nil
+
+        coordinator.player?.removeAllItems()
         coordinator.player = nil
+
         view.playerLayer.player = nil
     }
 
     final class Coordinator {
         var player: AVQueuePlayer?
         var looper: AVPlayerLooper?
+        var readyObserver: NSKeyValueObservation?
+
+        func playWhenReady() {
+            guard let player,
+                  let item = player.currentItem else { return }
+
+            if item.status == .readyToPlay {
+                player.play()
+                return
+            }
+
+            readyObserver = item.observe(\.status, options: [.initial, .new]) {
+                [weak self] item, _ in
+
+                guard item.status == .readyToPlay else {
+                    return
+                }
+
+                self?.player?.play()
+                self?.readyObserver = nil
+            }
+        }
     }
 
     final class PlayerView: UIView {

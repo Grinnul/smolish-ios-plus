@@ -68,20 +68,71 @@ final class MyProfileViewModel: ObservableObject {
             self.nextCursor = response.nextCursor
         } catch { errorMessage = error.localizedDescription }
     }
+
+}
+
+enum VideoTab {
+    case yourVideos, liked, bookmarks
+
+    var icon: String {
+        switch self {
+        case .yourVideos: return "play.rectangle"
+        case .liked: return "heart.fill"
+        case .bookmarks: return "bookmark"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .yourVideos: return "Your Videos"
+        case .liked: return "Liked Videos"
+        case .bookmarks: return "Bookmarks"
+        }
+    }
 }
 
 struct MySmolishProfileView: View {
     let profile: SmolishProfile
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var webAuthentication: WebAuthenticationStore
+    @StateObject private var settings = Settings()
     @StateObject private var model = MyProfileViewModel()
     @State private var selectedVideo: SmolishVideo?
+    @State private var isLoadingVideo = false
+    @State private var loadVideoError: String?
     @State private var showAccountSwitcher = false
+    @State private var selectedTab: VideoTab = .yourVideos
+    @State private var likedVideos: [ClipItem] = []
+    @State private var isLoadingLiked = false
+    @State private var likedErrorMessage: String?
+    @State private var bookmarkedVideos: [ClipItem] = []
+    @State private var hasFetchedProfileTabs = false
+    @State private var isLoadingBookmarks = false
+    @State private var bookmarksErrorMessage: String?
+    @State private var showSettings: Bool = false
 
     private var shareURL: URL? {
         profile.handle.flatMap { URL(string: "https://smolish.com/@\($0)") }
     }
-
+    private func openClip(_ clip: ClipItem) {
+        Task {
+            isLoadingVideo = true
+            defer { isLoadingVideo = false }
+            do {
+                let response = try await APIClient.shared.feed(author: clip.authorHandle)
+                print("feed(author:) for \(clip.authorHandle) returned \(response.items.count) items")
+                if let match = response.items.first(where: { $0.id == clip.id }) {
+                    selectedVideo = match
+                } else if let anyByAuthor = response.items.first {
+                    selectedVideo = clip.asSmolishVideo(author: anyByAuthor)
+                } else {
+                    selectedVideo = clip.asSmolishVideo()
+                }
+            } catch {
+                loadVideoError = error.localizedDescription
+            }
+        }
+    }
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
@@ -116,8 +167,16 @@ struct MySmolishProfileView: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
+                            .glassEffect(.regular.interactive())
+                            .padding(.horizontal)
                         }
                         Menu {
+                            Link(destination: URL(string: "https://smolish.com/settings")!) {
+                                Label("Account Settings (Web UI)", systemImage: "safari")
+                            }
+                            //Button("App Settings", systemImage: "gear") {
+                            //    Task { showSettings = true }
+                            //}
                             Button("Refresh profile", systemImage: "arrow.clockwise") {
                                 Task { await session.verifyStoredCookie() }
                             }
@@ -129,9 +188,13 @@ struct MySmolishProfileView: View {
                             Image(systemName: "ellipsis").frame(width: 42, height: 34)
                         }
                         .buttonStyle(.bordered)
+                        .glassEffect(.regular.interactive())
+                        .padding()
+                        .presentationDetents([.medium])
+                        .presentationBackground(.clear)
+                        
                     }
-                    .padding(.horizontal)
-
+                    
                     Button {
                         showAccountSwitcher = true
                     } label: {
@@ -139,46 +202,132 @@ struct MySmolishProfileView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
+                    .glassEffect(.regular.interactive())
                     .padding(.horizontal)
+                    
                 }
                 .padding(.bottom, 18)
 
                 Divider()
                 HStack {
-                    Label("Videos", systemImage: "play.rectangle")
+                    Menu {
+                        Button {
+                            selectedTab = .yourVideos
+                        } label: {
+                            Label(VideoTab.yourVideos.title, systemImage: VideoTab.yourVideos.icon)
+                        }
+                        Button {
+                            selectedTab = .liked
+                        } label: {
+                            Label(VideoTab.liked.title, systemImage: VideoTab.liked.icon)
+                        }
+                        Button {
+                            selectedTab = .bookmarks
+                        } label: {
+                            Label(VideoTab.bookmarks.title, systemImage: VideoTab.bookmarks.icon)
+                        }
+                    } label: {
+                        Image(systemName: selectedTab.icon)
+                            .frame(width: 30, height: 30)
+                            .font(.title2.weight(.medium))
+                            .foregroundColor(.white)
+                    }
+                    .padding(10)
+                    .glassEffect(.regular.interactive())
+
+                    Text(selectedTab.title)
                         .font(.headline)
                     Spacer()
-                    Text((profile.videosCount > 0 ? profile.videosCount : model.videos.count).formatted())
+                    Text(countForSelectedTab.formatted())
                         .font(.subheadline).foregroundStyle(.secondary)
+
                 }
                 .padding()
-
-                if model.isLoading && model.videos.isEmpty {
-                    ProgressView().padding(.vertical, 42)
-                } else if model.videos.isEmpty {
-                    ContentUnavailableView("No public videos", systemImage: "play.rectangle")
-                        .padding(.vertical, 28)
-                } else {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2) {
-                        ForEach(model.videos) { video in
-                            Button { selectedVideo = video } label: {
-                                ZStack(alignment: .bottomLeading) {
-                                    AsyncImage(url: video.thumbnail) { image in
-                                        image.resizable().scaledToFill()
-                                    } placeholder: { Color.secondary.opacity(0.16) }
-                                    .frame(maxWidth: .infinity).aspectRatio(0.72, contentMode: .fit).clipped()
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "play.fill")
-                                        Text(video.viewsCount.formatted(.number.notation(.compactName)))
+                if selectedTab == .yourVideos {
+                    if model.isLoading && model.videos.isEmpty {
+                        ProgressView().padding(.vertical, 42)
+                    } else if model.videos.isEmpty {
+                        ContentUnavailableView("No public videos", systemImage: "play.rectangle")
+                            .padding(.vertical, 28)
+                    } else {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2) {
+                            ForEach(model.videos) { video in
+                                Button { selectedVideo = video } label: {
+                                    ZStack(alignment: .bottomLeading) {
+                                        AsyncImage(url: video.thumbnail) { image in
+                                            image.resizable().scaledToFill()
+                                        } placeholder: { Color.secondary.opacity(0.16) }
+                                        .frame(maxWidth: .infinity).aspectRatio(0.72, contentMode: .fit).clipped()
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "play.fill")
+                                            let viewsText = video.viewsCount.formatted(
+                                                .number.notation(.compactName)
+                                            )
+                                            Text(viewsText)
+                                        }
+                                        .font(.caption2.bold()).foregroundStyle(.white).padding(6).shadow(radius: 3)
                                     }
-                                    .font(.caption2.bold()).foregroundStyle(.white).padding(6).shadow(radius: 3)
+                                }
+                                .buttonStyle(.plain)
+                                .task {
+                                    if let handle = profile.handle {
+                                        await model.loadMoreIfNeeded(current: video, handle: handle)
+                                    }
                                 }
                             }
-                            .buttonStyle(.plain)
-                            .task {
-                                if let handle = profile.handle {
-                                    await model.loadMoreIfNeeded(current: video, handle: handle)
+                        }
+                    }
+                }
+                else if selectedTab == .liked {
+                    if isLoadingLiked && likedVideos.isEmpty {
+                        ProgressView().padding(.vertical, 42)
+                    } else if likedVideos.isEmpty {
+                        ContentUnavailableView("No liked videos", systemImage: "heart.slash.fill")
+                            .padding(.vertical, 28)
+                    } else {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2) {
+                            ForEach(likedVideos, id: \.id) { clip in
+                                Button { openClip(clip) } label: {
+                                    ZStack(alignment: .bottomLeading) {
+                                        AsyncImage(url: URL(string: clip.thumbnail)) { image in
+                                            image.resizable().scaledToFill()
+                                        } placeholder: { Color.secondary.opacity(0.16) }
+                                        .frame(maxWidth: .infinity).aspectRatio(0.72, contentMode: .fit).clipped()
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "play.fill")
+                                            Text(clip.viewsCount.formatted(.number.notation(.compactName)))
+                                        }
+                                        .font(.caption2.bold()).foregroundStyle(.white).padding(6).shadow(radius: 3)
+                                    }
                                 }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                else if selectedTab == .bookmarks {
+                    if isLoadingBookmarks && bookmarkedVideos.isEmpty {
+                        ProgressView().padding(.vertical, 42)
+                    } else if bookmarkedVideos.isEmpty {
+                        ContentUnavailableView("No bookmarks", systemImage: "bookmark")
+                            .padding(.vertical, 28)
+                    } else {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2) {
+                            ForEach(bookmarkedVideos, id: \.id) { clip in
+                                Button { openClip(clip) } label: {
+                                    ZStack(alignment: .bottomLeading) {
+                                        AsyncImage(url: URL(string: clip.thumbnail)) { image in
+                                            image.resizable().scaledToFill()
+                                        } placeholder: { Color.secondary.opacity(0.16) }
+                                        .frame(maxWidth: .infinity).aspectRatio(0.72, contentMode: .fit).clipped()
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "play.fill")
+                                            Text(clip.viewsCount.formatted(.number.notation(.compactName)))
+                                        }
+                                        .font(.caption2.bold()).foregroundStyle(.white).padding(6).shadow(radius: 3)
+                                    }
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -194,6 +343,16 @@ struct MySmolishProfileView: View {
             SmolishAccountSwitcherView()
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showSettings) {
+            Text("Dummy String")
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .onChange(of: selectedTab) { _, newValue in
+            if newValue == .liked || newValue == .bookmarks {
+                Task { await loadProfileTabsIfNeeded() }
+            }
         }
         .fullScreenCover(item: $selectedVideo) { video in
             ZStack(alignment: .topTrailing) {
@@ -211,10 +370,16 @@ struct MySmolishProfileView: View {
             set: { if !$0 { model.errorMessage = nil } }
         )) { Button("OK", role: .cancel) {} } message: { Text(model.errorMessage ?? "Please try again.") }
     }
-
+    private var countForSelectedTab: Int {
+        switch selectedTab {
+        case .yourVideos: return profile.videosCount > 0 ? profile.videosCount : model.videos.count
+        case .liked: return likedVideos.count
+        case .bookmarks: return bookmarkedVideos.count
+        }
+    }
     private var banner: some View {
         ZStack {
-            LinearGradient(colors: [.smolishBlue.opacity(0.55), .purple.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: [settings.accent.opacity(0.55), .purple.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing)
             if let bannerURL = profile.bannerUrl {
                 AsyncImage(url: bannerURL) { image in
                     image.resizable().scaledToFit()
@@ -227,7 +392,7 @@ struct MySmolishProfileView: View {
     private var braincellsMetric: some View {
         VStack(spacing: 2) {
             Label(profile.braincells.formatted(.number.notation(.compactName)), systemImage: "brain.head.profile")
-                .font(.headline).foregroundStyle(Color.smolishBlue)
+                .font(.headline).foregroundStyle(settings.accent)
             Text(profile.braincellsProvisional ? "Braincells*" : "Braincells")
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -239,11 +404,31 @@ struct MySmolishProfileView: View {
             Text(label).font(.caption).foregroundStyle(.secondary)
         }
     }
+
+    private func loadProfileTabsIfNeeded() async {
+        guard !hasFetchedProfileTabs, let handle = profile.handle else { return }
+        isLoadingLiked = true
+        isLoadingBookmarks = true
+        defer {
+            isLoadingLiked = false
+            isLoadingBookmarks = false
+        }
+        do {
+            let tabs = try await APIClient.shared.profileTabs(handle: handle)
+            likedVideos = tabs.likedClips.items
+            bookmarkedVideos = tabs.savedClips.items
+            hasFetchedProfileTabs = true
+        } catch {
+            likedErrorMessage = error.localizedDescription
+            bookmarksErrorMessage = error.localizedDescription
+        }
+    }
 }
 
 struct SmolishAccountSwitcherView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var webAuthentication: WebAuthenticationStore
+    @StateObject private var settings = Settings()
     @State private var showAddAccount = false
 
     var body: some View {
@@ -297,7 +482,7 @@ struct SmolishAccountSwitcherView: View {
                                         if webAuthentication.switchingAccountToken == account.sessionToken {
                                             ProgressView()
                                         } else if account.active {
-                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.smolishBlue)
+                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(settings.accent)
                                         }
                                     }
                                     .contentShape(Rectangle())
@@ -313,7 +498,7 @@ struct SmolishAccountSwitcherView: View {
                                 showAddAccount = true
                             } label: {
                                 Label("Add another account", systemImage: "person.badge.plus")
-                                    .font(.headline).foregroundStyle(Color.smolishBlue)
+                                    .font(.headline).foregroundStyle(settings.accent)
                             }
                             .disabled(webAuthentication.accounts.count >= 10)
                         } footer: {
@@ -333,6 +518,7 @@ struct SmolishAccountSwitcherView: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
+        
         .task { await webAuthentication.loadAccounts() }
         .sheet(isPresented: $showAddAccount, onDismiss: {
             Task { await webAuthentication.loadAccounts() }

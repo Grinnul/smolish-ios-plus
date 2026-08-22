@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct FeedView: View {
     let isTabActive: Bool
@@ -6,6 +7,7 @@ struct FeedView: View {
     @EnvironmentObject private var session: SessionStore
     @StateObject private var model = FeedViewModel()
     @State private var currentVideoID: String?
+    @State private var didLoadFeed = false
     @State private var showSignIn = false
 
     var body: some View {
@@ -38,6 +40,8 @@ struct FeedView: View {
                                 .clipped()
                                 .id(video.id)
                                 .task { await model.loadMoreIfNeeded(current: video) }
+                            
+
                             }
                         }
                         .scrollTargetLayout()
@@ -46,17 +50,25 @@ struct FeedView: View {
                     .scrollTargetBehavior(.paging)
                     .scrollClipDisabled(false)
                     .scrollPosition(id: $currentVideoID)
-                    .refreshable { await model.refresh() }
-                    .onChange(of: model.videos) { _, videos in
-                        if currentVideoID == nil || !videos.contains(where: { $0.id == currentVideoID }) {
-                            currentVideoID = videos.first?.id
-                        }
-                    }
+
                 }
             }
+            
         }
-        .task(id: session.accountRevision) { await model.refresh() }
+        .onChange(of: model.videos) { _, videos in
+            if currentVideoID == nil || !videos.contains(where: { $0.id == currentVideoID }) {
+                currentVideoID = videos.first?.id
+                model.isPaused = true
+            }
+        }
+        .task {
+            guard !didLoadFeed else { return }
+            didLoadFeed = true
+
+            await model.refresh()
+        }
         .sheet(isPresented: $showSignIn) { CookieSignInView() }
+
     }
 
 }

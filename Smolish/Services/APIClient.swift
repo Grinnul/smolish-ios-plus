@@ -56,7 +56,15 @@ actor APIClient {
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
     }
-
+    func profileTabs(handle: String) async throws -> ProfileTabsData {
+        let url = baseURL.appending(path: "@\(handle)")
+        let data = try await authenticatedData(url: url)
+        guard let html = String(data: data, encoding: .utf8),
+              let parsed = ProfileTabsParser.parse(html: html) else {
+            throw APIError.invalidResponse
+        }
+        return parsed
+    }
     func feed(cursor: String? = nil, author: String? = nil, friends: Bool = false, refreshNonce: String? = nil) async throws -> FeedResponse {
         var components = URLComponents(url: baseURL.appending(path: "api/feed"), resolvingAgainstBaseURL: false)!
         var queryItems: [URLQueryItem] = []
@@ -243,7 +251,8 @@ actor APIClient {
         try validate(response: response, data: data)
         return data
     }
-
+    
+    
     private func mutation(path: String, method: String, body: [String: String]) async throws {
         await AuthRequestGate.shared.waitUntilAvailable()
         guard let cookie = KeychainCookieStore.load() else {
@@ -299,9 +308,36 @@ actor APIClient {
     }
 }
 
+struct ClipItem: Decodable {
+    let id: String
+    let title: String
+    let thumbnail: String
+    let viewsCount: Int
+    let durationSeconds: Int
+    let authorHandle: String
+    let pinned: Bool
+}
+
+struct ClipsPage: Decodable {
+    let items: [ClipItem]
+    let nextCursor: String?
+}
+
+struct ProfileTabsData: Decodable {
+    let handle: String
+    let isViewer: Bool
+    let clips: ClipsPage
+    let likedClips: ClipsPage
+    let savedClips: ClipsPage
+    let likesPublic: Bool
+    let likesVisible: Bool
+}
+
 private struct ErrorEnvelope: Decodable {
     let error: String?
 }
+
+
 
 private struct UnreadEnvelope: Decodable {
     let unread: Int
@@ -372,5 +408,107 @@ private enum StudioAnalyticsParser {
         if let value = value as? NSNumber { return value.doubleValue }
         if let value = value as? String { return Double(value) }
         return nil
+    }
+}
+
+extension ClipItem {
+    func asSmolishVideo(author: SmolishVideo? = nil) -> SmolishVideo {
+        SmolishVideo(
+            id: id,
+            title: title,
+            description: "",
+            src: URL(string: "https://cdn.smolish.com/videos/\(id)/1080p.mp4")!,
+            thumbnail: URL(string: thumbnail),
+            width: 1080,
+            height: 1920,
+            durationSeconds: Double(durationSeconds),
+            epilepsyWarning: false,
+            aiGenerated: false,
+            viewsCount: viewsCount,
+            likesCount: 0,
+            commentsCount: 0,
+            transcript: nil,
+            publishedAt: .now,
+            authorId: author?.authorId ?? "",
+            authorHandle: authorHandle,
+            authorName: author?.authorName ?? authorHandle,
+            authorAvatar: author?.authorAvatar,
+            authorFollowers: author?.authorFollowers ?? 0,
+            authorBraincells: author?.authorBraincells ?? 0,
+            authorBraincellsProvisional: author?.authorBraincellsProvisional ?? false,
+            viewerFollows: author?.viewerFollows ?? false,
+            viewerLiked: false,
+            viewerSaved: false,
+            friendLikers: []
+        )
+    }
+}
+
+enum ProfileTabsParser {
+
+    static func parse(html: String) -> ProfileTabsData? {
+        let combined = extractFlightText(from: html)
+
+        guard let line = combined
+            .split(separator: "\n")
+            .first(where: { $0.contains("\"likedClips\"") }) else {
+            return nil
+        }
+
+        guard let colonIndex = line.firstIndex(of: ":") else { return nil }
+        let jsonPart = String(line[line.index(after: colonIndex)...])
+
+        guard let data = jsonPart.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [Any],
+              array.count >= 4,
+              let propsDict = array[3] as? [String: Any],
+              let propsData = try? JSONSerialization.data(withJSONObject: propsDict) else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(ProfileTabsData.self, from: propsData)
+    }
+
+    private static func extractFlightText(from html: String) -> String {
+        let pattern = #"self\.__next_f\.push\(\[1,\"((?:[^"\\]|\\.)*)\"\]\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return "" }
+
+        let nsrange = NSRange(html.startIndex..., in: html)
+        var combined = ""
+
+        regex.enumerateMatches(in: html, range: nsrange) { match, _, _ in
+            guard let match, let range = Range(match.range(at: 1), in: html) else { return }
+            combined += unescape(String(html[range]))
+        }
+        return combined
+    }
+
+    private static func unescape(_ s: String) -> String {
+        var result = ""
+        let chars = Array(s)
+        var i = 0
+        while i < chars.count {
+            if chars[i] == "\\", i + 1 < chars.count {
+                switch chars[i + 1] {
+                case "n": result.append("\n")
+                case "t": result.append("\t")
+                case "\"": result.append("\"")
+                case "\\": result.append("\\")
+                case "u" where i + 5 < chars.count:
+                    let hex = String(chars[(i + 2)...(i + 5)])
+                    if let code = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(code) {
+                        result.append(Character(scalar))
+                    }
+                    i += 4
+                default:
+                    result.append(chars[i + 1])
+                }
+                i += 2
+            } else {
+                result.append(chars[i])
+                i += 1
+            }
+        }
+        return result
     }
 }

@@ -50,6 +50,7 @@ final class NotificationCenterStore: ObservableObject {
 
 struct NotificationsView: View {
     @EnvironmentObject private var session: SessionStore
+    @StateObject private var settings = Settings()
     @EnvironmentObject private var notifications: NotificationCenterStore
 
     var body: some View {
@@ -71,7 +72,7 @@ struct NotificationsView: View {
                             AsyncImage(url: item.actorAvatar) { image in
                                 image.resizable().scaledToFill()
                             } placeholder: {
-                                Color.smolishBlue.overlay(Image(systemName: "bell.fill"))
+                                settings.accent.overlay(Image(systemName: "bell.fill"))
                             }
                             .frame(width: 44, height: 44)
                             .clipShape(Circle())
@@ -87,7 +88,7 @@ struct NotificationsView: View {
                             }
                             Spacer()
                             if item.isUnread {
-                                Circle().fill(Color.smolishBlue).frame(width: 8, height: 8).padding(.top, 6)
+                                Circle().fill(settings.accent).frame(width: 8, height: 8).padding(.top, 6)
                             }
                         }
                         .padding(.vertical, 4)

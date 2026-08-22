@@ -6,10 +6,22 @@ final class FeedViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var isLoadingMore = false
     @Published var errorMessage: String?
+    @Published var isPaused = false
 
     private var nextCursor: String?
-    private var hasLoaded = false
+    var hasLoaded = false
+    
+    private var loadContinuation: CheckedContinuation<Void, Never>?
 
+    func waitUntilLoaded() async {
+        if hasLoaded {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            loadContinuation = continuation
+        }
+    }
     func loadIfNeeded() async {
         guard !hasLoaded else { return }
         await refresh()

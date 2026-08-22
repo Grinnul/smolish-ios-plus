@@ -49,6 +49,7 @@ struct SearchView: View {
             }
             .navigationTitle("Search")
             .searchable(text: $query, prompt: "Creators and @handles")
+            
         }
         .task(id: query) { await model.search(query) }
         .sheet(item: $selectedCreator) { CreatorProfileView(summary: $0) }
@@ -57,7 +58,7 @@ struct SearchView: View {
 
 private struct SearchUserRow: View {
     let user: SearchUser
-
+    @StateObject private var settings = Settings()
     var body: some View {
         HStack(spacing: 12) {
             CreatorAvatar(url: user.avatarUrl, size: 52)
@@ -67,7 +68,7 @@ private struct SearchUserRow: View {
                 HStack(spacing: 8) {
                     Text("\(user.followersCount.formatted(.number.notation(.compactName))) followers")
                     Label(user.braincells.formatted(.number.notation(.compactName)), systemImage: "brain.head.profile")
-                        .foregroundStyle(Color.smolishBlue)
+                        .foregroundStyle(settings.accent)
                 }
                 .font(.caption)
             }
@@ -130,6 +131,7 @@ struct CreatorProfileView: View {
     let summary: CreatorSummary
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: SessionStore
+    @StateObject private var settings = Settings()
     @StateObject private var model: CreatorProfileViewModel
     @State private var selectedVideo: SmolishVideo?
     @State private var showSignIn = false
@@ -155,17 +157,20 @@ struct CreatorProfileView: View {
                             metric(summary.braincells, "Braincells")
                         }
                         if let bio = summary.bio, !bio.isEmpty { Text(bio).multilineTextAlignment(.center).font(.subheadline) }
-                        Button {
-                            guard session.isAuthenticated else { showSignIn = true; return }
-                            Task { await model.toggleFollow() }
-                        } label: {
-                            Text(model.following ? "Following" : "Follow")
-                                .font(.subheadline.bold()).frame(minWidth: 120).padding(.vertical, 9)
-                                .foregroundStyle(model.following ? Color.primary : Color.white)
-                                .background(model.following ? Color.clear : Color.smolishBlue, in: RoundedRectangle(cornerRadius: 10))
-                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(model.following ? Color.secondary : Color.clear))
+                        HStack {
+                            Button {
+                                guard session.isAuthenticated else { showSignIn = true; return }
+                                Task { await model.toggleFollow() }
+                            } label: {
+                                Text(model.following ? "Following" : "Follow")
+                                    .font(.subheadline.bold()).frame(minWidth: 120).padding(.vertical, 9)
+                                    .foregroundStyle(model.following ? Color.primary : Color.white)
+                                    .background(model.following ? Color.clear : settings.accent, in: RoundedRectangle(cornerRadius: 10))
+                                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(model.following ? Color.secondary : Color.clear))
+                            }
                         }
-                        .buttonStyle(.plain)
+
+                        
                     }
                     .padding(.horizontal)
 
@@ -193,7 +198,18 @@ struct CreatorProfileView: View {
             }
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Link(destination: URL(string: "https://smolish.com/@" + summary.handle)!) {
+                        Text("Full Profile")
+                    }
+                }
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+
+            }
         }
         .task { await model.load() }
         .sheet(isPresented: $showSignIn) { CookieSignInView() }
@@ -222,11 +238,12 @@ struct CreatorProfileView: View {
 }
 
 struct CreatorAvatar: View {
+    @StateObject private var settings = Settings()
     let url: URL?
     let size: CGFloat
     var body: some View {
         AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: {
-            Color.smolishBlue.opacity(0.45).overlay(Image(systemName: "person.fill").foregroundStyle(.white))
+            settings.accent.opacity(0.45).overlay(Image(systemName: "person.fill").foregroundStyle(.white))
         }
         .frame(width: size, height: size).clipShape(Circle())
     }
