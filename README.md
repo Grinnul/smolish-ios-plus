@@ -28,8 +28,8 @@ The app uses `https://smolish.com` as its API and web-authentication endpoint. S
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/mtxben/smolish-ios.git
-   cd smolish-ios
+   git clone https://github.com/Grinnul/smolish-ios-plus.git
+   cd smolish-ios-plus
    ```
 
 2. Open `Smolish.xcodeproj` in Xcode.
