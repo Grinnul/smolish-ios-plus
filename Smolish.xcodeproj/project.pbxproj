@@ -334,13 +334,15 @@
 				DEVELOPMENT_TEAM = XS8TT8J8G5;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Smolish/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Smolish Plus";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.smolish.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gtd.smolishplus;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -362,13 +364,15 @@
 				DEVELOPMENT_TEAM = XS8TT8J8G5;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Smolish/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Smolish Plus";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.smolish.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gtd.smolishplus;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;

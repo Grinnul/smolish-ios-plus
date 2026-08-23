@@ -3,7 +3,7 @@ import SwiftUI
 @MainActor
 final class Settings: ObservableObject {
     @Published var ready: Bool = false
-    @Published var accent: Color = .smolishBlue
+    @Published var accent: Color = .smolishPurple
 }
 
 @main
