@@ -12,14 +12,14 @@ An iOS client for the Smolish service, written in SwiftUI. This repository prese
 - Notifications with unread count, pull-to-refresh, and periodic refresh while the app is running
 - **Studio**: creator analytics, 7/30/90-day ranges, uploaded-video metrics, video uploads, and video metadata editing
 - A native share sheet using canonical video URLs
-- A SwiftUI app with an iOS 17 deployment target and no third-party package dependencies
+- A SwiftUI app with an iOS 26 deployment target and no third-party package dependencies
 
 The app uses `https://smolish.com` as its API and web-authentication endpoint. Some features depend on endpoints, cookies, and behavior outside this repository; they may stop working if that service changes.
 
 ## Requirements
 
 - macOS with **Xcode 26 or newer**
-- An iPhone, iPad, or Simulator running **iOS 17.0 or newer**
+- An iPhone, iPad, or Simulator running **iOS 26.0 or newer**
 - An Apple ID and developer signing team to install on a physical device
 - A valid Smolish account only if you want to test signed-in features
 
@@ -33,7 +33,7 @@ The app uses `https://smolish.com` as its API and web-authentication endpoint. S
    ```
 
 2. Open `Smolish.xcodeproj` in Xcode.
-3. Select the **Smolish** scheme and an iOS 17+ simulator or a connected device.
+3. Select the **Smolish** scheme and an iOS 26+ simulator or a connected device.
 4. For a physical device, open the target's **Signing & Capabilities** settings and select your own development team. Xcode may require a unique bundle identifier for your account.
 5. Press **Run** (`⌘R`).
 
@@ -101,7 +101,7 @@ The V1 manual flow remains available from Profile as **Use V1 manual cookie fall
 
 Issues and pull requests are useful for documentation, maintainability, and improvements that can be tested without misrepresenting the app as official. If you create a derivative or publish a build, give it its own name and visual identity, remove any third-party branded assets you are not authorized to use, and make its independent status clear to users.
 
-Before opening a pull request, build the app in Xcode against an iOS 17+ destination. Do not commit secrets, cookies, User-Agent values, signing certificates, provisioning profiles, or generated user data.
+Before opening a pull request, build the app in Xcode against an iOS 26+ destination. Do not commit secrets, cookies, User-Agent values, signing certificates, provisioning profiles, or generated user data.
 
 ## Known limitations
 
