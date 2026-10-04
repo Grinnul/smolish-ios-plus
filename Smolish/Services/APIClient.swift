@@ -22,12 +22,6 @@ actor AuthRequestGate {
         await withCheckedContinuation { waiters.append($0) }
     }
 }
-
-/// Smolish now protects `/api/*` with a client-side gate (proof-of-work, signed paths and
-/// encrypted request/response bodies) that its web app installs by patching `window.fetch`.
-/// Instead of re-implementing that protocol natively, every smolish.com request is executed
-/// by the signed-in `WKWebView` through the site's own `fetch`, so the gate, Cloudflare
-/// clearance and session cookies are handled by the site's code and survive future changes.
 @MainActor
 final class WebFetchBridge {
     static let shared = WebFetchBridge()
