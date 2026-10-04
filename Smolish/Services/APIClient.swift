@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 actor AuthRequestGate {
     static let shared = AuthRequestGate()
@@ -19,6 +20,99 @@ actor AuthRequestGate {
     func waitUntilAvailable() async {
         guard maintenanceActive else { return }
         await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+/// Smolish now protects `/api/*` with a client-side gate (proof-of-work, signed paths and
+/// encrypted request/response bodies) that its web app installs by patching `window.fetch`.
+/// Instead of re-implementing that protocol natively, every smolish.com request is executed
+/// by the signed-in `WKWebView` through the site's own `fetch`, so the gate, Cloudflare
+/// clearance and session cookies are handled by the site's code and survive future changes.
+@MainActor
+final class WebFetchBridge {
+    static let shared = WebFetchBridge()
+    weak var webView: WKWebView?
+
+    struct Response: Sendable {
+        let status: Int
+        let data: Data
+    }
+
+    private struct Envelope: Decodable {
+        let status: Int
+        let body: String
+    }
+
+    private static let fetchScript = """
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25000);
+    try {
+      const headers = { accept: accept };
+      const init = { method: method, credentials: 'include', cache: 'no-store', headers: headers, signal: controller.signal };
+      if (body !== null) { headers['content-type'] = 'application/json'; init.body = body; }
+      const response = await fetch(path, init);
+      const text = await response.text();
+      return JSON.stringify({ status: response.status, body: text });
+    } catch (error) {
+      return JSON.stringify({ status: 0, body: String(error) });
+    } finally {
+      clearTimeout(timer);
+    }
+    """
+
+    func fetch(path: String, method: String, body: Data?, accept: String) async throws -> Response {
+        guard let webView else {
+            throw APIError.server(status: 0, message: "The Smolish browser session isn't ready yet.")
+        }
+        let bodyString: Any = body.flatMap { String(data: $0, encoding: .utf8) } ?? NSNull()
+        let arguments: [String: Any] = ["path": path, "method": method, "body": bodyString, "accept": accept]
+
+        var lastError: Error = APIError.invalidResponse
+        for attempt in 0..<2 {
+            guard await waitUntilReady(webView) else {
+                throw APIError.server(status: 0, message: "The Smolish browser session is still loading. Try again in a moment.")
+            }
+            do {
+                guard let json = try await webView.callAsyncJavaScript(
+                    Self.fetchScript, arguments: arguments, in: nil, contentWorld: .page
+                ) as? String,
+                      let envelope = try? JSONDecoder().decode(Envelope.self, from: Data(json.utf8)) else {
+                    throw APIError.invalidResponse
+                }
+                if envelope.status == 0 {
+                    throw APIError.server(status: 0, message: "Network error: \(envelope.body)")
+                }
+                return Response(status: envelope.status, data: Data(envelope.body.utf8))
+            } catch let error as APIError {
+                throw error
+            } catch {
+                lastError = error
+                // A navigation can interrupt the script; give the page a moment and retry once.
+                if attempt == 0 { try? await Task.sleep(for: .milliseconds(500)) }
+            }
+        }
+        throw lastError
+    }
+
+    /// Waits for a settled smolish.com document with the site's gate installed (or a short grace period).
+    private func waitUntilReady(_ webView: WKWebView) async -> Bool {
+        if webView.url?.host?.hasSuffix("smolish.com") != true, !webView.isLoading {
+            webView.load(URLRequest(url: URL(string: "https://smolish.com/search")!))
+        }
+        for attempt in 0..<48 {
+            if !webView.isLoading,
+               webView.url?.host?.hasSuffix("smolish.com") == true,
+               let json = try? await webView.callAsyncJavaScript(
+                   "return JSON.stringify({ rs: document.readyState, gate: !!window.__smolishGate });",
+                   arguments: [:], in: nil, contentWorld: .page
+               ) as? String,
+               let state = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+               state["rs"] as? String == "complete" {
+                if state["gate"] as? Bool == true || attempt >= 16 { return true }
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return false
     }
 }
 
@@ -58,7 +152,7 @@ actor APIClient {
     }
     func profileTabs(handle: String) async throws -> ProfileTabsData {
         let url = baseURL.appending(path: "@\(handle)")
-        let data = try await authenticatedData(url: url)
+        let data = try await send(url, accept: "text/html,application/xhtml+xml")
         guard let html = String(data: data, encoding: .utf8),
               let parsed = ProfileTabsParser.parse(html: html) else {
             throw APIError.invalidResponse
@@ -182,57 +276,26 @@ actor APIClient {
     }
 
     func postComment(videoID: String, body: String, parentID: String? = nil) async throws -> PostedCommentResponse {
-        await AuthRequestGate.shared.waitUntilAvailable()
-        guard let cookie = KeychainCookieStore.load() else {
-            throw APIError.server(status: 401, message: "Sign in from Profile first.")
-        }
-        var request = URLRequest(url: baseURL.appending(path: "api/comments"))
-        request.httpMethod = "POST"
-        request.httpBody = try JSONEncoder().encode(PostCommentBody(videoId: videoID, body: body, gifSlug: nil, parentId: parentID))
-        applyBrowserHeaders(to: &request, cookie: cookie, mutation: true)
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+        let payload = try JSONEncoder().encode(PostCommentBody(videoId: videoID, body: body, gifSlug: nil, parentId: parentID))
+        let data = try await send(baseURL.appending(path: "api/comments"), method: "POST", body: payload)
         return try decoder.decode(PostedCommentResponse.self, from: data)
     }
 
     func setCommentReaction(commentID: String, liked: Bool) async throws {
-        await AuthRequestGate.shared.waitUntilAvailable()
         let reaction: String? = liked ? "like" : nil
-        guard let cookie = KeychainCookieStore.load() else {
-            throw APIError.server(status: 401, message: "Sign in from Profile first.")
-        }
-        var request = URLRequest(url: baseURL.appending(path: "api/comments/reactions"))
-        request.httpMethod = "POST"
-        request.httpBody = try JSONEncoder().encode(CommentReactionBody(commentId: commentID, reaction: reaction))
-        applyBrowserHeaders(to: &request, cookie: cookie, mutation: true)
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+        let payload = try JSONEncoder().encode(CommentReactionBody(commentId: commentID, reaction: reaction))
+        _ = try await send(baseURL.appending(path: "api/comments/reactions"), method: "POST", body: payload)
     }
 
     func studioAnalytics(days: Int) async throws -> StudioAnalytics {
         var components = URLComponents(url: baseURL.appending(path: "api/studio/analytics"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "days", value: String(days))]
-        let data = try await authenticatedData(url: components.url!)
+        let data = try await send(components.url!)
         return StudioAnalyticsParser.parse(data: data)
     }
 
     private func request<T: Decodable>(_ url: URL, authenticated: Bool = false, includeSessionIfAvailable: Bool = false) async throws -> T {
-        if authenticated || includeSessionIfAvailable {
-            await AuthRequestGate.shared.waitUntilAvailable()
-        }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 20
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if authenticated {
-            guard let cookie = KeychainCookieStore.load() else {
-                throw APIError.server(status: 401, message: "Sign in from Profile first.")
-            }
-            applyBrowserHeaders(to: &request, cookie: cookie)
-        } else if includeSessionIfAvailable, let cookie = KeychainCookieStore.load() {
-            applyBrowserHeaders(to: &request, cookie: cookie)
-        }
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+        let data = try await send(url)
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -240,71 +303,40 @@ actor APIClient {
         }
     }
 
-    private func authenticatedData(url: URL) async throws -> Data {
-        await AuthRequestGate.shared.waitUntilAvailable()
-        guard let cookie = KeychainCookieStore.load() else {
-            throw APIError.server(status: 401, message: "Sign in from Profile first.")
-        }
-        var request = URLRequest(url: url)
-        applyBrowserHeaders(to: &request, cookie: cookie)
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
-        return data
-    }
-    
-    
     private func mutation(path: String, method: String, body: [String: String]) async throws {
-        await AuthRequestGate.shared.waitUntilAvailable()
-        guard let cookie = KeychainCookieStore.load() else {
-            throw APIError.server(status: 401, message: "Sign in from Profile first.")
-        }
-        var request = URLRequest(url: baseURL.appending(path: path))
-        request.httpMethod = method
-        request.httpBody = try JSONEncoder().encode(body)
-        applyBrowserHeaders(to: &request, cookie: cookie, mutation: true)
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+        _ = try await send(baseURL.appending(path: path), method: method, body: try JSONEncoder().encode(body))
     }
 
     private func authenticatedJSON<Body: Encodable, Response: Decodable>(path: String, method: String, body: Body) async throws -> Response {
-        await AuthRequestGate.shared.waitUntilAvailable()
-        guard let cookie = KeychainCookieStore.load() else { throw APIError.server(status: 401, message: "Sign in from Profile first.") }
-        var request = URLRequest(url: baseURL.appending(path: path))
-        request.httpMethod = method
-        request.httpBody = try JSONEncoder().encode(body)
-        applyBrowserHeaders(to: &request, cookie: cookie, mutation: true)
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+        let data = try await send(baseURL.appending(path: path), method: method, body: try JSONEncoder().encode(body))
         if Response.self == EmptyResponse.self, data.isEmpty {
             return EmptyResponse() as! Response
         }
         return try decoder.decode(Response.self, from: data)
     }
 
-    private func validate(response: URLResponse, data: Data) throws {
-        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
-        guard (200..<300).contains(http.statusCode) else {
+    /// Runs the request inside the signed-in web view so the site's gate handles it.
+    private func send(_ url: URL, method: String = "GET", body: Data? = nil, accept: String = "application/json") async throws -> Data {
+        await AuthRequestGate.shared.waitUntilAvailable()
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        var path = components?.percentEncodedPath ?? url.path
+        if let query = components?.percentEncodedQuery, !query.isEmpty { path += "?\(query)" }
+        let response = try await WebFetchBridge.shared.fetch(path: path, method: method, body: body, accept: accept)
+        try validate(status: response.status, data: response.data)
+        return response.data
+    }
+
+    private func validate(status: Int, data: Data) throws {
+        guard (200..<300).contains(status) else {
             let body = try? JSONDecoder().decode(ErrorEnvelope.self, from: data)
-            let cloudflareMessage: String? = http.statusCode == 403 && http.value(forHTTPHeaderField: "server")?.lowercased().contains("cloudflare") == true
-                ? "Cloudflare rejected this browser session. Paste the complete fresh Cookie header and navigator.userAgent from the same browser in Profile."
-                : nil
-            throw APIError.server(status: http.statusCode, message: body?.error ?? cloudflareMessage)
+            let message: String? = body?.error ?? (status == 401 ? "Sign in from Profile first." : nil)
+            throw APIError.server(status: status, message: message)
         }
     }
 
-    private func applyBrowserHeaders(to request: inout URLRequest, cookie: String, mutation: Bool = false) {
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(cookie, forHTTPHeaderField: "Cookie")
-        request.setValue("https://smolish.com", forHTTPHeaderField: "Origin")
-        request.setValue("https://smolish.com/", forHTTPHeaderField: "Referer")
-        request.setValue("same-origin", forHTTPHeaderField: "Sec-Fetch-Site")
-        request.setValue("cors", forHTTPHeaderField: "Sec-Fetch-Mode")
-        request.setValue("empty", forHTTPHeaderField: "Sec-Fetch-Dest")
-        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
-        if mutation { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        if let userAgent = BrowserUserAgentStore.load(), !userAgent.isEmpty {
-            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        }
+    private func validate(response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        try validate(status: http.statusCode, data: data)
     }
 }
 
